@@ -162,9 +162,10 @@ def _derive(frame: pl.LazyFrame) -> pl.LazyFrame:
         (pl.col("_wp_lopsided") & (pl.col("qtr") >= 4)).alias("is_garbage_time"),
     )
     return frame.with_columns(
-        pl.when(pl.col("is_designed_play")).then(pl.col("pass_play")).otherwise(None).alias(
-            "is_pass_call"
-        )
+        pl.when(pl.col("is_designed_play"))
+        .then(pl.col("pass_play"))
+        .otherwise(None)
+        .alias("is_pass_call")
     ).drop("_wp_neutral", "_wp_lopsided")
 
 
@@ -179,7 +180,9 @@ def transform_season(season: int, paths: Paths | None = None) -> Path:
     resolved = paths or data_paths()
     source = resolved.season_raw(season)
     if not source.exists():
-        raise FileNotFoundError(f"raw season file missing: {source}. Run `fourthdown ingest` first.")
+        raise FileNotFoundError(
+            f"raw season file missing: {source}. Run `fourthdown ingest` first."
+        )
     destination = resolved.season_processed(season)
     destination.parent.mkdir(parents=True, exist_ok=True)
     LOGGER.info("transforming season %s", season)
