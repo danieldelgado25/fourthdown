@@ -6,9 +6,10 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 02 complete** — ingestion, ETL, the DuckDB semantic layer, and guarded
-text-to-SQL against a local Ollama model. The narrative retrieval, modelling, and serving
-phases are listed in [docs/architecture.md](docs/architecture.md).
+**Status: phase 03 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
+text-to-SQL, and hybrid (dense + lexical) retrieval over generated game and drive
+narratives in Postgres/pgvector. The modelling and serving phases are listed in
+[docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
@@ -57,6 +58,34 @@ produces a runnable query for 14 of the 15 golden questions and the right answer
 the failures are logged per question in
 [docs/text_to_sql_eval.md](docs/text_to_sql_eval.md).
 
+## Narrative retrieval
+
+Statistics come from SQL; "what happened" comes from retrieval. The warehouse is
+rendered into deterministic English — one document per game, one per drive — which is
+embedded with Ollama and stored in Postgres with pgvector:
+
+```bash
+docker compose up -d                         # pgvector/pgvector:pg16 on :5432
+ollama pull nomic-embed-text
+fourthdown index --seasons 2009- --playoff-drives    # ~8.6k documents
+fourthdown recall "the comeback from 28-3"           # passages + provenance
+fourthdown explain "how did the Seahawks lose Super Bowl XLIX?"
+fourthdown eval-retrieval                    # -> docs/retrieval_eval.md
+```
+
+Every search runs two retrievers and fuses them by reciprocal rank: cosine similarity
+over the embeddings (HNSW) for paraphrase, and Postgres full-text search (GIN over a
+generated `tsvector`) for the names and numbers a dense model blurs. `--grain`,
+`--season`, and `--team` filter before ranking, and each hit reports whether dense,
+lexical, or both found it. `fourthdown explain` then answers from the retrieved passages
+only, with `[n]` citations.
+
+Indexing is incremental and keyed on document ID, so re-running after a new week lands
+rewrites only what changed. Drives outnumber games 23 to 1 and embedding is the slow
+step, so `--playoff-drives` keeps the drive grain to the postseason; drop it to index all
+99k. The index refuses to mix embedding spaces — a different model or dimensionality
+requires `--reset`.
+
 ## Layout
 
 ```
@@ -70,6 +99,14 @@ src/fourthdown/
     warehouse.py      DuckDB views: plays, games, drives, team_game, player_game
     audit.py          validation checks + the generated audit report
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
+  narrative/
+    render.py         DuckDB rows -> deterministic game and drive documents
+    teams.py          abbreviations -> names, so "Chiefs" matches `KC`
+  retrieval/
+    embed.py          Ollama embeddings behind a protocol, plus a hashing stub for tests
+    store.py          pgvector schema, dense + lexical search, reciprocal-rank fusion
+    index.py          warehouse -> narratives -> vectors -> Postgres, incremental
+    recall.py         grounded answers with citations over retrieved passages
   rag/
     schema_card.py    the prompt's view/column/semantics card, read from the live catalog
     text_to_sql.py    generate -> validate -> execute, with repair-on-error
@@ -77,11 +114,14 @@ src/fourthdown/
   evaluation/
     golden.json       15 questions with reference SQL, including traps and one refusal
     harness.py        result-level scoring and the Markdown report
+    golden_retrieval.json  16 narrative questions with the games that answer them
+    retrieval_harness.py   hit@1 / recall@k / MRR for hybrid vs dense vs lexical
 docs/
   architecture.md     system design and phase status
   data_dictionary.md  grain, derived columns, leakage, data quirks
   data_audit.md       generated: per-season coverage and check results
   text_to_sql_eval.md generated: golden-set score and per-question failures
+  retrieval_eval.md   generated: retrieval metrics per mode
 ```
 
 ## Data
@@ -103,6 +143,9 @@ Data is gitignored. `make build` reproduces it.
 ```bash
 make lint typecheck test     # ruff, mypy, pytest
 ```
+
+Tests marked `postgres` need `docker compose up -d` and skip without it; they run against
+a separate `fourthdown_test` database so the development index survives.
 
 Tests marked `slow` assert against the built warehouse (season play counts, the
 neutral-vs-overall pass-rate gap, the rise in passing across the period) and skip when it

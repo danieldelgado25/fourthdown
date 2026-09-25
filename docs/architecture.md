@@ -76,6 +76,39 @@ semantic layer exists to handle: historical team aliases (`SD` -> `LAC`), kneels
 have to be excluded, neutral-script versus raw tendency, and one question the data cannot
 answer, which the model is expected to decline.
 
+## Narrative retrieval (phase 03)
+
+```
+DuckDB views ──> generated narratives ──> Ollama embeddings ──> Postgres + pgvector
+                                                                        │
+            question ──> embedding ─┬─> dense (cosine, HNSW) ───┐       │
+                                    └─> lexical (tsvector, GIN) ┴─> RRF ┴─> passages ──> LLM
+```
+
+**The corpus is generated, not scraped.** The warehouse stores `posteam = 'KC'` and
+`fixed_drive_result = 'Touchdown'`; no embedding of that matches "what happened on the
+Chiefs' last drive". So `narrative/render.py` writes deterministic English from the same
+views the SQL layer queries -- one document per game, one per drive -- expanding team
+codes to names and postseason weeks to "Super Bowl XLIX (49)". Deterministic matters:
+re-indexing a season produces byte-identical text, so upserts are idempotent and the
+embedding cost is paid once.
+
+**Rows are not embedded.** 768k plays would be 768k vectors of mostly boilerplate, and
+cosine similarity over them answers nothing a `GROUP BY` does not answer better. 4.3k
+games plus 99k drives is the grain at which a question is actually asked.
+
+**Both halves of retrieval, fused by rank.** Dense search generalises ("collapse" finds
+a blown lead); lexical search does not miss a name or a number ("Super Bowl LVII",
+"J.Burrow"). Their scores are incomparable -- a cosine distance and a `ts_rank_cd` share
+no scale -- so they are combined by reciprocal rank fusion, `1/(60 + rank)` summed across
+the lists a document appears in, which needs no tuning and no normalisation.
+[docs/retrieval_eval.md](retrieval_eval.md) scores hybrid against each half alone on 16
+golden questions; that comparison is the justification for the extra moving part.
+
+**Numbers still come from SQL.** The narratives contain numbers, but a retrieved passage
+is evidence about *which* game, not the authority on a total. `fourthdown ask` stays the
+path for aggregates; `fourthdown explain` answers from passages and cites them.
+
 ## Phase status
 
 | phase | scope | status |
@@ -83,8 +116,8 @@ answer, which the model is expected to decline.
 | 00 | scope, repo, data audit | done |
 | 01 | Polars ETL, Parquet, DuckDB semantic layer | done |
 | 02 | schema card, text-to-SQL, sqlglot guardrails, golden set | done |
-| 03 | narrative corpus, embeddings, hybrid retrieval | next |
-| 04 | win probability, 4th-down advisor, play-call model | planned |
+| 03 | narrative corpus, embeddings, hybrid retrieval | done |
+| 04 | win probability, 4th-down advisor, play-call model | next |
 | 05 | orchestrator, Flask API, React dashboard | planned |
 | 06 | evaluation harness in CI | planned |
 | 07 | Docker, then Helm on a local Kubernetes cluster | planned |
