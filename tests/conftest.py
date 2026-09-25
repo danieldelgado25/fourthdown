@@ -108,6 +108,26 @@ def _raw_frame() -> pl.DataFrame:
     return frame.with_columns([pl.col(column).cast(pl.Float64) for column in numeric])
 
 
+class ScriptedClient:
+    """An LLMClient that returns canned replies in order and records what it was asked."""
+
+    def __init__(self, *replies: str) -> None:
+        self._replies = list(replies)
+        self.prompts: list[str] = []
+        self.temperatures: list[float] = []
+
+    @property
+    def model(self) -> str:
+        return "scripted"
+
+    def complete(self, *, system: str, prompt: str, temperature: float = 0.0) -> str:
+        self.prompts.append(prompt)
+        self.temperatures.append(temperature)
+        if not self._replies:
+            raise AssertionError("the chain asked for more completions than were scripted")
+        return self._replies.pop(0)
+
+
 @pytest.fixture()
 def raw_frame() -> pl.DataFrame:
     return _raw_frame()

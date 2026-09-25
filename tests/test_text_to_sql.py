@@ -3,29 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from conftest import ScriptedClient
 
 from fourthdown.rag import text_to_sql
 from fourthdown.rag.text_to_sql import TextToSQL
-
-
-class ScriptedClient:
-    """Returns canned replies in order and records the prompts it was given."""
-
-    def __init__(self, *replies: str) -> None:
-        self._replies = list(replies)
-        self.prompts: list[str] = []
-        self.temperatures: list[float] = []
-
-    @property
-    def model(self) -> str:
-        return "scripted"
-
-    def complete(self, *, system: str, prompt: str, temperature: float = 0.0) -> str:
-        self.prompts.append(prompt)
-        self.temperatures.append(temperature)
-        if not self._replies:
-            raise AssertionError("the chain asked for more completions than were scripted")
-        return self._replies.pop(0)
 
 
 @pytest.mark.parametrize(

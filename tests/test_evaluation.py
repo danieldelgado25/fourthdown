@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from conftest import ScriptedClient
 
 from fourthdown.evaluation import harness
 from fourthdown.rag.text_to_sql import SQLAnswer
 from fourthdown.sql import guard
-from tests.test_text_to_sql import ScriptedClient
 
 
 def test_golden_set_loads_and_is_well_formed() -> None:
