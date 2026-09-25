@@ -52,7 +52,10 @@ Every generated query is parsed with sqlglot before it reaches DuckDB: one read-
 SELECT, only the five semantic views, no filesystem functions, and a `LIMIT` is imposed.
 Rejections and DuckDB errors are fed back to the model for a bounded number of repairs.
 Accuracy is measured by executing the golden questions and comparing results with
-handwritten reference SQL, not by matching query text.
+handwritten reference SQL, not by matching query text. `qwen2.5-coder:7b` currently
+produces a runnable query for 14 of the 15 golden questions and the right answer for 7;
+the failures are logged per question in
+[docs/text_to_sql_eval.md](docs/text_to_sql_eval.md).
 
 ## Layout
 
