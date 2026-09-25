@@ -114,10 +114,18 @@ WITH filtered AS (
     ORDER BY embedding <=> %(vector)s::vector
     LIMIT %(candidates)s
 ), lexical AS (
-    SELECT doc_id, row_number() OVER (ORDER BY ts_rank_cd(tsv, query) DESC) AS rank
-    FROM filtered, websearch_to_tsquery('english', %(question)s) AS query
-    WHERE %(use_lexical)s::bool AND tsv @@ query
-    ORDER BY ts_rank_cd(tsv, query) DESC
+    SELECT doc_id, row_number() OVER (ORDER BY ts_rank_cd(tsv, parsed.query) DESC) AS rank
+    -- ORed rather than ANDed: a question is a sentence, and requiring every
+    -- content word ("happened", "between") matches nothing. ts_rank_cd still
+    -- rewards the documents that cover more of the query.
+    FROM filtered,
+         (
+             SELECT nullif(
+                 replace(plainto_tsquery('english', %(question)s)::text, ' & ', ' | '), ''
+             )::tsquery AS query
+         ) AS parsed
+    WHERE %(use_lexical)s::bool AND tsv @@ parsed.query
+    ORDER BY ts_rank_cd(tsv, parsed.query) DESC
     LIMIT %(candidates)s
 )
 SELECT d.doc_id, d.grain, d.game_id, d.season, d.week, d.teams, d.title, d.body,

@@ -103,7 +103,14 @@ a blown lead); lexical search does not miss a name or a number ("Super Bowl LVII
 no scale -- so they are combined by reciprocal rank fusion, `1/(60 + rank)` summed across
 the lists a document appears in, which needs no tuning and no normalisation.
 [docs/retrieval_eval.md](retrieval_eval.md) scores hybrid against each half alone on 16
-golden questions; that comparison is the justification for the extra moving part.
+golden questions: hybrid 0.94 hit@1 against 0.88 dense-only and 0.81 lexical-only, which
+is the justification for the extra moving part.
+
+One detail did all the work there. `websearch_to_tsquery` ANDs the query terms, so
+"What happened in Super Bowl XLIX between the Patriots and the Seahawks?" required
+*happened* and *between* to appear and matched nothing -- lexical scored 0.06 hit@1 and
+hybrid was worse than dense alone. ORing the lexemes and letting `ts_rank_cd` reward
+coverage instead took lexical to 0.81 and hybrid past both halves.
 
 **Numbers still come from SQL.** The narratives contain numbers, but a retrieved passage
 is evidence about *which* game, not the authority on a total. `fourthdown ask` stays the

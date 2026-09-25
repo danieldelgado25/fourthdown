@@ -80,6 +80,10 @@ generated `tsvector`) for the names and numbers a dense model blurs. `--grain`,
 lexical, or both found it. `fourthdown explain` then answers from the retrieved passages
 only, with `[n]` citations.
 
+Over 8,501 indexed documents (4,345 games, 4,156 playoff drives) and 16 golden questions,
+hybrid retrieval gets 0.94 hit@1 against 0.88 for dense alone and 0.81 for lexical alone
+([docs/retrieval_eval.md](docs/retrieval_eval.md)).
+
 Indexing is incremental and keyed on document ID, so re-running after a new week lands
 rewrites only what changed. Drives outnumber games 23 to 1 and embedding is the slow
 step, so `--playoff-drives` keeps the drive grain to the postseason; drop it to index all
