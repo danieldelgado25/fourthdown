@@ -72,5 +72,10 @@ def test_ollama_embedder_rejects_a_truncated_response(monkeypatch: pytest.Monkey
 
 
 def test_embedders_satisfy_the_protocol() -> None:
+    # isinstance against a runtime protocol reads every member, and reading
+    # OllamaEmbedder.dimensions probes the server, so the live backend is
+    # checked by type instead.
     assert isinstance(embed.HashingEmbedder(), embed.Embedder)
-    assert isinstance(embed.default_embedder(), embed.Embedder)
+    assert isinstance(embed.default_embedder(), embed.OllamaEmbedder)
+    live: embed.Embedder = embed.OllamaEmbedder()  # mypy checks the conformance
+    assert live.name.startswith("ollama:")
