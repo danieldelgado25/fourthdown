@@ -1,0 +1,96 @@
+{
+  "description": "Golden questions for text-to-SQL. Each carries a hand-written reference query; grading compares executed results, not query text, because there are many correct ways to write each of these.",
+  "questions": [
+    {
+      "id": "team-season-pass-rate",
+      "question": "What was the Kansas City Chiefs' pass rate on designed plays in the 2023 season?",
+      "tags": ["aggregate", "filtering"],
+      "reference_sql": "SELECT avg(is_pass_call::INT) AS pass_rate FROM plays WHERE season = 2023 AND posteam = 'KC' AND is_designed_play"
+    },
+    {
+      "id": "most-pass-happy-neutral",
+      "question": "Which team had the highest neutral-script pass rate in 2022?",
+      "tags": ["ranking", "game-script"],
+      "reference_sql": "SELECT posteam FROM plays WHERE season = 2022 AND is_designed_play AND is_neutral_script GROUP BY posteam ORDER BY avg(is_pass_call::INT) DESC LIMIT 1"
+    },
+    {
+      "id": "third-and-long-epa",
+      "question": "What is the league average EPA per play on third and long since 2020?",
+      "tags": ["aggregate", "situational"],
+      "reference_sql": "SELECT avg(epa) AS epa_per_play FROM plays WHERE season >= 2020 AND down = 3 AND distance_bucket IN ('long', 'very_long') AND is_designed_play"
+    },
+    {
+      "id": "red-zone-td-rate",
+      "question": "How many drives reached the red zone and ended in a touchdown in 2023?",
+      "tags": ["drives", "counting"],
+      "reference_sql": "SELECT count(*) FROM drives WHERE season = 2023 AND end_yardline_100 <= 20 AND scored_touchdown"
+    },
+    {
+      "id": "coldest-game",
+      "question": "What was the coldest game on record in this data, and what was the temperature?",
+      "tags": ["games", "extremes"],
+      "reference_sql": "SELECT game_id, temp FROM games WHERE temp IS NOT NULL ORDER BY temp ASC LIMIT 1"
+    },
+    {
+      "id": "qb-epa-leader",
+      "question": "Which passer had the best EPA per play in the 2021 season, with at least 300 plays?",
+      "tags": ["players", "ranking", "having"],
+      "reference_sql": "SELECT player_name FROM player_game WHERE season = 2021 AND role = 'passer' GROUP BY player_name HAVING sum(plays) >= 300 ORDER BY sum(epa_per_play * plays) / sum(plays) DESC LIMIT 1"
+    },
+    {
+      "id": "fourth-down-attempts-trend",
+      "question": "How many fourth-down attempts were there in each season from 2019 to 2023?",
+      "tags": ["trend", "group-by"],
+      "reference_sql": "SELECT season, count(*) AS attempts FROM plays WHERE season BETWEEN 2019 AND 2023 AND down = 4 AND is_designed_play GROUP BY season ORDER BY season"
+    },
+    {
+      "id": "shotgun-share",
+      "question": "What share of designed plays were run out of shotgun in 2024?",
+      "tags": ["aggregate", "rate"],
+      "reference_sql": "SELECT avg(shotgun::INT) AS shotgun_rate FROM plays WHERE season = 2024 AND is_designed_play"
+    },
+    {
+      "id": "home-win-rate",
+      "question": "What fraction of regular season games did the home team win in 2023?",
+      "tags": ["games", "rate"],
+      "reference_sql": "SELECT avg((home_margin > 0)::INT) AS home_win_rate FROM games WHERE season = 2023 AND season_type = 'REG'"
+    },
+    {
+      "id": "team-epa-ranking",
+      "question": "Rank the top five teams by offensive EPA per play in 2023.",
+      "tags": ["ranking", "team-game"],
+      "reference_sql": "SELECT posteam FROM plays WHERE season = 2023 AND is_designed_play GROUP BY posteam ORDER BY avg(epa) DESC LIMIT 5"
+    },
+    {
+      "id": "chargers-relocation",
+      "question": "How many designed plays did the San Diego Chargers run in 2013?",
+      "tags": ["aliasing", "trap"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2013 AND posteam = 'LAC' AND is_designed_play"
+    },
+    {
+      "id": "kneel-exclusion",
+      "question": "How many rushing plays did the Ravens call in 2023, excluding quarterback kneels?",
+      "tags": ["trap", "designed-play"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2023 AND posteam = 'BAL' AND is_designed_play AND NOT is_pass_call"
+    },
+    {
+      "id": "two-minute-pass-rate",
+      "question": "What is the pass rate inside the two-minute warning compared to the rest of the game, across all seasons?",
+      "tags": ["comparison", "situational"],
+      "reference_sql": "SELECT is_two_minute, avg(is_pass_call::INT) AS pass_rate FROM plays WHERE is_designed_play GROUP BY is_two_minute ORDER BY is_two_minute"
+    },
+    {
+      "id": "biggest-blowout",
+      "question": "What was the largest margin of victory in any game in the data?",
+      "tags": ["games", "extremes"],
+      "reference_sql": "SELECT max(abs(home_margin)) AS margin FROM games"
+    },
+    {
+      "id": "unanswerable-salary",
+      "question": "Which team had the highest payroll in 2023?",
+      "tags": ["unanswerable"],
+      "reference_sql": null,
+      "expect_unanswerable": true
+    }
+  ]
+}

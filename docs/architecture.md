@@ -47,14 +47,43 @@ write SQL against `team_game` rarely invents a join, while a model handed 372 ra
 invents one constantly. Anything the views cannot express is a signal to add a view, not
 to widen the prompt.
 
+## Query layer (built)
+
+```
+question ──> schema card + question ──> LLM ──> SQL ──> sqlglot guard ──> DuckDB (read-only)
+                    ▲                                        │
+                    └──────── error + the columns that exist ┘   (bounded repairs)
+```
+
+Three properties matter more than the prompt:
+
+**The card is generated, not written.** Column names and types come from
+`information_schema` at call time, so a view change cannot silently desynchronise from the
+prompt. `plays` is trimmed to a curated subset rather than dumped whole; the card stays
+under ~5k characters, which leaves room for the question and a repair round inside a small
+local context window.
+
+**The guard is a parser, not a regex.** sqlglot parses the statement and rejects anything
+that is not exactly one read-only query, references a relation outside the five views,
+or calls a filesystem function (`read_parquet`, `glob`, ...). A `LIMIT` is inserted when
+absent and tightened when it is too large. Execution then happens on a read-only
+connection, so the guard is a second line of defence rather than the only one.
+
+**Accuracy is measured on results.** The golden set pairs each question with handwritten
+reference SQL and the harness compares executed rows, because there are many correct ways
+to write the same query and none of them match a string. It includes the traps the
+semantic layer exists to handle: historical team aliases (`SD` -> `LAC`), kneels that
+have to be excluded, neutral-script versus raw tendency, and one question the data cannot
+answer, which the model is expected to decline.
+
 ## Phase status
 
 | phase | scope | status |
 | --- | --- | --- |
 | 00 | scope, repo, data audit | done |
 | 01 | Polars ETL, Parquet, DuckDB semantic layer | done |
-| 02 | schema card, text-to-SQL, sqlglot guardrails, golden set | next |
-| 03 | narrative corpus, embeddings, hybrid retrieval | planned |
+| 02 | schema card, text-to-SQL, sqlglot guardrails, golden set | done |
+| 03 | narrative corpus, embeddings, hybrid retrieval | next |
 | 04 | win probability, 4th-down advisor, play-call model | planned |
 | 05 | orchestrator, Flask API, React dashboard | planned |
 | 06 | evaluation harness in CI | planned |
