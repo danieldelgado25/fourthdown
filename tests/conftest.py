@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import duckdb
 import polars as pl
 import pytest
 
 from fourthdown.config import Paths, data_paths
-from fourthdown.data import schema
+from fourthdown.data import etl, schema, warehouse
 
 RAW_ROWS: list[dict] = [
     # 1st and 10 at own 25, tied, first quarter: a designed pass on a neutral script.
@@ -122,3 +123,13 @@ def tmp_paths(tmp_path) -> Paths:
 @pytest.fixture(scope="session")
 def project_paths() -> Paths:
     return data_paths()
+
+
+@pytest.fixture()
+def views_connection(raw_frame, tmp_paths):
+    """The semantic views over the synthetic season, in memory."""
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    with duckdb.connect(":memory:") as connection:
+        warehouse.create_views(connection, tmp_paths)
+        yield connection
