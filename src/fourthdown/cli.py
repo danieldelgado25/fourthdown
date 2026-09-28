@@ -9,9 +9,12 @@ from typing import Annotated
 
 import typer
 
+from fourthdown.agent import build as agent_build
+from fourthdown.agent.router import KeywordRouter, LLMRouter
+from fourthdown.api import create_app
 from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, ingest, warehouse
-from fourthdown.evaluation import harness, retrieval_harness
+from fourthdown.evaluation import harness, retrieval_harness, routing_harness
 from fourthdown.llm import LLMError, OllamaClient, default_client
 from fourthdown.models import fourth_down
 from fourthdown.models import train as training
@@ -357,6 +360,84 @@ def advise_cmd(
         goal_to_go=yardline <= togo,
     )
     typer.echo(advisor.recommend(state).render())
+
+
+@app.command("chat")
+def chat_cmd(
+    question: Annotated[str, typer.Argument(help="Any question; the router picks the tool.")],
+    tool: Annotated[
+        str | None, typer.Option("--tool", help="Force a tool instead of routing.")
+    ] = None,
+    model: Model = None,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Route one question to SQL, retrieval, the advisor, or tendencies, and answer it."""
+    _configure_logging(verbose)
+    with agent_build.services(paths=data_paths(data_dir), model=model) as services:
+        if services.readiness.degraded:
+            for name, reason in services.readiness.skipped.items():
+                typer.echo(f"unavailable: {name} ({reason})", err=True)
+        try:
+            answer = services.assistant.ask(question, tool=tool)
+        except KeyError:
+            typer.echo(
+                f"unknown tool {tool!r}; loaded: {', '.join(services.assistant.tool_names)}",
+                err=True,
+            )
+            raise typer.Exit(code=1) from None
+        typer.echo(f"[{answer.tool}] {answer.route_reason} ({answer.decided_by})\n")
+        typer.echo(answer.answer)
+        if answer.table is not None:
+            typer.echo("")
+            typer.echo(
+                _render_rows(answer.table.columns, [tuple(row) for row in answer.table.rows])
+            )
+        for position, passage in enumerate(answer.passages, start=1):
+            typer.echo(f"\n[{position}] {passage.title} ({passage.found_by})")
+        if "sql" in answer.detail:
+            typer.echo(f"\nSQL:\n{answer.detail['sql']}")
+
+
+@app.command("serve")
+def serve_cmd(
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8000,
+    model: Model = None,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Run the Flask API in front of the assistant."""
+    _configure_logging(verbose)
+    with agent_build.services(paths=data_paths(data_dir), model=model) as services:
+        for name, reason in services.readiness.skipped.items():
+            typer.echo(f"unavailable: {name} ({reason})", err=True)
+        typer.echo(f"tools: {', '.join(services.readiness.tools)}")
+        create_app(provided=services).run(host=host, port=port, threaded=False)
+
+
+@app.command("eval-routing")
+def eval_routing_cmd(
+    output: Output = Path("docs/routing_eval.md"),
+    model: Model = None,
+    verbose: Verbose = False,
+) -> None:
+    """Score keyword and LLM routing on the golden routing set."""
+    _configure_logging(verbose)
+    tools = routing_harness.catalog()
+    client = default_client() if model is None else OllamaClient(model)
+    reports = [routing_harness.evaluate(KeywordRouter(tools), name="keyword")]
+    if client.available():
+        reports.append(
+            routing_harness.evaluate(LLMRouter(tools, client), name=f"llm ({client.model})")
+        )
+    else:
+        typer.echo(f"skipping the LLM router: no {client.model} at {client.host}", err=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(routing_harness.render(reports))
+    for report in reports:
+        typer.echo(f"{report.name}: {report.correct}/{report.total} ({report.accuracy():.0%})")
+    typer.echo(f"written to {output}")
 
 
 @app.command()
