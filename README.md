@@ -6,10 +6,10 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 03 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
-text-to-SQL, and hybrid (dense + lexical) retrieval over generated game and drive
-narratives in Postgres/pgvector. The modelling and serving phases are listed in
-[docs/architecture.md](docs/architecture.md).
+**Status: phase 04 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
+text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, and the three
+models: win probability, the fourth-down advisor, and run/pass play call. The serving
+phases are listed in [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
@@ -90,6 +90,40 @@ step, so `--playoff-drives` keeps the drive grain to the postseason; drop it to 
 99k. The index refuses to mix embedding spaces — a different model or dimensionality
 requires `--reset`.
 
+## Models
+
+```bash
+fourthdown train                             # fit all three -> docs/model_eval.md, data/models/
+fourthdown advise --yardline 38 --togo 2 --minutes 4 --score-diff -3
+```
+
+Three models, all trained on 2009-2018, early-stopped on 2019-2020, and reported on
+held-out 2021-2024 — season-disjoint, because splitting plays at random leaks the
+outcome of a game into its own training set (every play of a win shares one label).
+
+**Win probability** is a small PyTorch MLP on eleven pre-snap fields (field position,
+down and distance, clock, score, timeouts, spread, home). It reaches 0.4553 log loss and
+0.0066 expected calibration error on 166k held-out plays, against 0.4548 for nflfastR's
+own `vegas_wp` — i.e. within noise of the reference implementation, from scratch.
+nflfastR's fitted columns (`wp`, `vegas_wp`, `epa`, `xpass`, `cp`, ...) are enumerated in
+`schema.LEAKAGE_COLUMNS` and `features.feature_matrix` raises if one reaches the design
+matrix, so they can only ever be baselines.
+
+**The fourth-down advisor** has no parameters of its own. It plays each option forward —
+go, field goal, punt — into the game state it produces, asks the win-probability model
+what that state is worth, and weights the branches by a conversion model (distance and
+field position), a field-goal model (kick distance), and the empirical punt landing spot.
+Because every option is a win-probability delta, the recommendation explains itself.
+Replaying 4,000 held-out fourth downs: coaches went for it on 20.8% of them, the advisor
+would on 42.3%, and the average actual decision left 0.40 win-probability points on the
+field.
+
+**Play call** is a gradient-boosted run/pass classifier: 74.0% accuracy and 0.815 AUC
+against a 61.7% base rate, and ahead of nflfastR's `xpass` (71.1%, 0.790) on the same
+plays. The analytics payoff is the per-team readability index it produces — how often the
+model's call was the call, on early-down neutral-script plays only, so game script is not
+mistaken for tendency. Full numbers in [docs/model_eval.md](docs/model_eval.md).
+
 ## Layout
 
 ```
@@ -115,6 +149,13 @@ src/fourthdown/
     schema_card.py    the prompt's view/column/semantics card, read from the live catalog
     text_to_sql.py    generate -> validate -> execute, with repair-on-error
   llm/client.py       Ollama behind a one-method protocol
+  models/
+    features.py       leakage-safe design matrices and season-disjoint splits
+    winprob.py        the PyTorch win-probability net, game state, training loop
+    fourth_down.py    go / field goal / punt, valued through win probability
+    playcall.py       run-pass GBM and the team predictability index
+    metrics.py        log loss, Brier, AUC, calibration error, reliability bins
+    train.py          fits all three, writes artifacts and docs/model_eval.md
   evaluation/
     golden.json       15 questions with reference SQL, including traps and one refusal
     harness.py        result-level scoring and the Markdown report
@@ -126,6 +167,7 @@ docs/
   data_audit.md       generated: per-season coverage and check results
   text_to_sql_eval.md generated: golden-set score and per-question failures
   retrieval_eval.md   generated: retrieval metrics per mode
+  model_eval.md       generated: held-out model metrics, calibration, predictability
 ```
 
 ## Data

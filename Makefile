@@ -1,6 +1,6 @@
 SEASONS ?= 2009-2024
 
-.PHONY: install format lint typecheck test ingest etl warehouse build audit index clean
+.PHONY: install format lint typecheck test ingest etl warehouse build audit index train clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -31,6 +31,9 @@ build: ingest etl warehouse
 
 audit:
 	fourthdown audit --output docs/data_audit.md
+
+train:
+	fourthdown train --output docs/model_eval.md
 
 index:
 	docker compose up -d
