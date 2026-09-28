@@ -6,9 +6,10 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 04 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
-text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, and the three
-models: win probability, the fourth-down advisor, and run/pass play call. The serving
+**Status: phase 05 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
+text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
+models (win probability, the fourth-down advisor, run/pass play call), and the serving
+layer: a tool-routing orchestrator behind a Flask API and a React dashboard. Remaining
 phases are listed in [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
@@ -124,6 +125,40 @@ plays. The analytics payoff is the per-team readability index it produces — ho
 model's call was the call, on early-down neutral-script plays only, so game script is not
 mistaken for tendency. Full numbers in [docs/model_eval.md](docs/model_eval.md).
 
+## The assistant, the API, and the dashboard
+
+One question, four tools. The router picks one and says why; the tool does the work and
+returns its own evidence — a table and the SQL behind it, retrieved passages with
+citations, or the win-probability value of every fourth-down option.
+
+```bash
+fourthdown chat "should they go for it on 4th and 2 from the 38, down 3 with 4 minutes left?"
+make serve                                   # Flask on :8000
+make web-install && make web                 # Vite dev server on :5173, proxying /api
+make eval-routing                            # -> docs/routing_eval.md
+```
+
+Routing is LLM-first with a deterministic keyword router underneath: the model is asked
+for exactly one tool name, and an unparseable, unknown, or unreachable answer falls back
+to keywords rather than failing the request. On a 20-question golden set both routers
+score 19/20 ([docs/routing_eval.md](docs/routing_eval.md)), which is the argument for
+keeping the cheap one as the fallback.
+
+Every dependency is optional at startup. Missing Postgres drops the narrative tool,
+missing model artifacts drop the advisor, missing Ollama drops LLM routing — the API
+reports what is loaded on `/api/health` and the dashboard greys out what it cannot do,
+rather than erroring on first use.
+
+| endpoint | purpose |
+| --- | --- |
+| `GET /api/health` | which of warehouse / llm / retrieval / models came up, and why not |
+| `POST /api/ask` | route a question; returns the answer plus table, passages, SQL, route |
+| `POST /api/advise` | fourth-down state in, ranked go / field goal / punt out |
+| `GET /api/tendencies` | neutral-script pass rate and EPA by team for a season |
+
+The services (DuckDB connection, pgvector pool, torch checkpoint) are opened once and
+held read-only for the life of the process, which makes the app single-worker by design.
+
 ## Layout
 
 ```
@@ -161,6 +196,19 @@ src/fourthdown/
     harness.py        result-level scoring and the Markdown report
     golden_retrieval.json  16 narrative questions with the games that answer them
     retrieval_harness.py   hit@1 / recall@k / MRR for hybrid vs dense vs lexical
+    golden_routing.json    20 questions labelled with the tool that should answer them
+    routing_harness.py     keyword vs LLM routing accuracy and misroutes
+  agent/
+    tools.py          stats / narrative / advisor / tendency behind one Tool protocol
+    parse.py          question -> season, team, and fourth-down game state
+    router.py         LLM tool choice with a keyword router as the fallback
+    assistant.py      route, run, and return structured evidence
+    build.py          open what is available, report what is not
+  api/app.py          Flask factory over one long-lived Services
+web/
+  src/api.ts          the typed wire format
+  src/App.tsx         readiness bar and the three panels
+  src/components/     ask, fourth-down advisor, team tendencies
 docs/
   architecture.md     system design and phase status
   data_dictionary.md  grain, derived columns, leakage, data quirks
@@ -168,6 +216,7 @@ docs/
   text_to_sql_eval.md generated: golden-set score and per-question failures
   retrieval_eval.md   generated: retrieval metrics per mode
   model_eval.md       generated: held-out model metrics, calibration, predictability
+  routing_eval.md     generated: routing accuracy, keyword vs LLM
 ```
 
 ## Data
@@ -188,6 +237,7 @@ Data is gitignored. `make build` reproduces it.
 
 ```bash
 make lint typecheck test     # ruff, mypy, pytest
+make web-test                # tsc, vite build, vitest
 ```
 
 Tests marked `postgres` need `docker compose up -d` and skip without it; they run against
