@@ -1,0 +1,114 @@
+[
+  {
+    "id": "super-bowl-49",
+    "question": "What happened in Super Bowl XLIX between the Patriots and the Seahawks?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2014_21_NE_SEA"]
+  },
+  {
+    "id": "super-bowl-49-final-drive",
+    "question": "Describe the Seahawks drive that ended Super Bowl XLIX at the goal line.",
+    "tags": ["drive", "playoff"],
+    "grain": "drive",
+    "expect_game_ids": ["2014_21_NE_SEA"]
+  },
+  {
+    "id": "super-bowl-51-comeback",
+    "question": "How did the Falcons lose their lead to New England in Super Bowl LI?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2016_21_NE_ATL"]
+  },
+  {
+    "id": "foles-super-bowl",
+    "question": "Which Super Bowl did Nick Foles win with the Philadelphia Eagles?",
+    "tags": ["game", "player"],
+    "grain": "game",
+    "expect_game_ids": ["2017_21_PHI_NE"]
+  },
+  {
+    "id": "eagles-super-bowl-drives",
+    "question": "What did the Eagles touchdown drives look like against New England in Super Bowl LII?",
+    "tags": ["drive", "playoff"],
+    "grain": "drive",
+    "expect_game_ids": ["2017_21_PHI_NE"]
+  },
+  {
+    "id": "super-bowl-58",
+    "question": "Summarise the Chiefs win over the San Francisco 49ers in Super Bowl LVIII.",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2023_22_SF_KC"]
+  },
+  {
+    "id": "super-bowl-57",
+    "question": "Who won Super Bowl LVII, the Kansas City Chiefs or the Philadelphia Eagles?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2022_22_KC_PHI"]
+  },
+  {
+    "id": "thirteen-seconds",
+    "question": "What happened in the Bills at Chiefs divisional playoff game after the 2021 season?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2021_20_BUF_KC"]
+  },
+  {
+    "id": "minneapolis-miracle-drive",
+    "question": "Describe the Minnesota Vikings final drive against the Saints in the 2017 divisional round.",
+    "tags": ["drive", "playoff"],
+    "grain": "drive",
+    "expect_game_ids": ["2017_19_NO_MIN"]
+  },
+  {
+    "id": "packers-lions-2015",
+    "question": "How did the Green Bay Packers game at Detroit in week 13 of 2015 end?",
+    "tags": ["game", "regular"],
+    "grain": "game",
+    "expect_game_ids": ["2015_13_GB_DET"]
+  },
+  {
+    "id": "bills-texans-wildcard",
+    "question": "What happened in the Buffalo Bills wild card game at Houston after the 2019 season?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2019_18_BUF_HOU"]
+  },
+  {
+    "id": "chiefs-lions-opener",
+    "question": "How did the Kansas City Chiefs week 1 game against Detroit in 2023 go?",
+    "tags": ["game", "regular"],
+    "grain": "game",
+    "expect_game_ids": ["2023_01_DET_KC"]
+  },
+  {
+    "id": "ravens-broncos-2012",
+    "question": "What happened in the Baltimore Ravens playoff game at Denver after the 2012 season?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2012_19_BAL_DEN"]
+  },
+  {
+    "id": "super-bowl-48",
+    "question": "How did the Seattle Seahawks beat Denver in Super Bowl XLVIII?",
+    "tags": ["game", "playoff"],
+    "grain": "game",
+    "expect_game_ids": ["2013_21_SEA_DEN"]
+  },
+  {
+    "id": "rams-chiefs-monday-night",
+    "question": "Describe the 54-51 Monday night game between the Chiefs and the Rams in 2018.",
+    "tags": ["game", "regular"],
+    "grain": "game",
+    "expect_game_ids": ["2018_11_KC_LA"]
+  },
+  {
+    "id": "chiefs-49ers-drives",
+    "question": "What were the Kansas City scoring drives in Super Bowl LVIII against San Francisco?",
+    "tags": ["drive", "playoff"],
+    "grain": "drive",
+    "expect_game_ids": ["2023_22_SF_KC"]
+  }
+]

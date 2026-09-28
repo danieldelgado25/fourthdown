@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+
 import duckdb
 import polars as pl
+import psycopg
 import pytest
 
 from fourthdown.config import Paths, data_paths
 from fourthdown.data import etl, schema, warehouse
+from fourthdown.retrieval.embed import HashingEmbedder
+from fourthdown.retrieval.store import DocumentStore, StoreError, dsn
+
+TEST_DATABASE = "fourthdown_test"
+TEST_EMBEDDER = HashingEmbedder(dimensions=32)
 
 RAW_ROWS: list[dict] = [
     # 1st and 10 at own 25, tied, first quarter: a designed pass on a neutral script.
@@ -126,6 +135,36 @@ class ScriptedClient:
         if not self._replies:
             raise AssertionError("the chain asked for more completions than were scripted")
         return self._replies.pop(0)
+
+
+def _test_dsn() -> str:
+    """A database of its own, so a test run never drops an index you just built."""
+    override = os.environ.get("FOURTHDOWN_TEST_PG_DSN")
+    if override:
+        return override
+    head, _, _ = dsn().rpartition("/")
+    return f"{head}/{TEST_DATABASE}"
+
+
+@pytest.fixture()
+def store() -> Iterator[DocumentStore]:
+    """An empty pgvector store, or a skip when no server is reachable."""
+    try:
+        with psycopg.connect(dsn(), autocommit=True) as admin:
+            exists = admin.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (TEST_DATABASE,)
+            ).fetchone()
+            if not exists:
+                admin.execute(f'CREATE DATABASE "{TEST_DATABASE}"')
+    except psycopg.Error as error:
+        pytest.skip(f"no Postgres available: {error}")
+    try:
+        opened = DocumentStore.open(_test_dsn())
+    except StoreError as error:
+        pytest.skip(f"no pgvector Postgres available: {error}")
+    with opened as active:
+        active.initialise(model=TEST_EMBEDDER.name, dimensions=TEST_EMBEDDER.dimensions, reset=True)
+        yield active
 
 
 @pytest.fixture()

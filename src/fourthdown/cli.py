@@ -11,14 +11,17 @@ import typer
 
 from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, ingest, warehouse
-from fourthdown.evaluation import harness
+from fourthdown.evaluation import harness, retrieval_harness
 from fourthdown.llm import LLMError, OllamaClient, default_client
+from fourthdown.narrative.render import GRAINS
 from fourthdown.rag import schema_card
 from fourthdown.rag.text_to_sql import TextToSQL
+from fourthdown.retrieval import DocumentStore, Retriever, default_embedder, index, recall
 
 app = typer.Typer(help="FourthDown data pipeline", no_args_is_help=True)
 
 DEFAULT_SEASONS = "2009-"
+DEFAULT_GRAINS = ",".join(GRAINS)
 
 
 def _latest_season() -> int:
@@ -42,6 +45,11 @@ Verbose = Annotated[bool, typer.Option("--verbose", "-v")]
 Output = Annotated[Path, typer.Option("--output", "-o")]
 Force = Annotated[bool, typer.Option("--force", help="Re-download seasons already on disk.")]
 Model = Annotated[str | None, typer.Option("--model", help="Ollama model; overrides the default.")]
+Grains = Annotated[str, typer.Option("--grains", help="Comma separated: game, drive.")]
+TopK = Annotated[int, typer.Option("--k", help="Passages to retrieve.")]
+Grain = Annotated[str | None, typer.Option("--grain", help="Restrict to 'game' or 'drive'.")]
+Season = Annotated[int | None, typer.Option("--season", help="Restrict to one season.")]
+Team = Annotated[str | None, typer.Option("--team", help="Restrict to a team abbreviation.")]
 
 
 def _render_rows(columns: tuple[str, ...], rows: list[tuple[object, ...]], limit: int = 20) -> str:
@@ -141,9 +149,9 @@ def ask_cmd(
         except LLMError as error:
             typer.echo(str(error), err=True)
             raise typer.Exit(code=1) from error
-    for index, attempt in enumerate(answer.attempts, start=1):
+    for position, attempt in enumerate(answer.attempts, start=1):
         if attempt.error:
-            typer.echo(f"attempt {index} rejected: {attempt.error}", err=True)
+            typer.echo(f"attempt {position} rejected: {attempt.error}", err=True)
     if answer.unanswerable:
         typer.echo("The warehouse does not contain the data needed to answer that.")
         return
@@ -172,6 +180,110 @@ def eval_cmd(
     typer.echo(
         f"{report.correct}/{report.total} correct, "
         f"{report.executed}/{report.total} runnable, written to {output}"
+    )
+
+
+def _parse_grains(grains: str) -> list[str]:
+    wanted = [grain.strip() for grain in grains.split(",") if grain.strip()]
+    unknown = [grain for grain in wanted if grain not in GRAINS]
+    if unknown:
+        raise typer.BadParameter(f"unknown grain(s) {unknown}; expected any of {list(GRAINS)}")
+    return wanted
+
+
+@app.command("index")
+def index_cmd(
+    grains: Grains = DEFAULT_GRAINS,
+    seasons: Seasons = DEFAULT_SEASONS,
+    playoff_drives: Annotated[
+        bool,
+        typer.Option("--playoff-drives", help="Index postseason drives only (4% of them)."),
+    ] = False,
+    reset: Annotated[bool, typer.Option("--reset", help="Drop the index first.")] = False,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Generate game and drive narratives, embed them, and upsert them into pgvector."""
+    _configure_logging(verbose)
+    wanted = ingest.parse_seasons(seasons, latest=_latest_season())
+    embedder = default_embedder()
+    with warehouse.connect(data_paths(data_dir)) as connection, DocumentStore.open() as store:
+        report = index.build(
+            connection,
+            store,
+            embedder,
+            grains=_parse_grains(grains),
+            seasons=wanted,
+            postseason_drives_only=playoff_drives,
+            reset=reset,
+        )
+    typer.echo(report.render())
+
+
+@app.command("recall")
+def recall_cmd(
+    question: Annotated[str, typer.Argument(help="A question about what happened.")],
+    k: TopK = 5,
+    grain: Grain = None,
+    season: Season = None,
+    team: Team = None,
+    verbose: Verbose = False,
+) -> None:
+    """Show the passages hybrid retrieval returns, without asking the model anything."""
+    _configure_logging(verbose)
+    embedder = default_embedder()
+    with DocumentStore.open() as store:
+        hits = Retriever(store, embedder).search(
+            question, k=k, grain=grain, season=season, team=team
+        )
+    if not hits:
+        typer.echo("no passages matched; is the index built? (`fourthdown index`)")
+        return
+    for position, hit in enumerate(hits, start=1):
+        typer.echo(f"[{position}] {hit.title} ({hit.found_by}, score {hit.score:.4f})")
+        typer.echo(f"    {hit.body}\n")
+
+
+@app.command("explain")
+def explain_cmd(
+    question: Annotated[str, typer.Argument(help="A question about what happened.")],
+    k: TopK = 5,
+    grain: Grain = None,
+    season: Season = None,
+    team: Team = None,
+    model: Model = None,
+    verbose: Verbose = False,
+) -> None:
+    """Answer a narrative question from retrieved passages, with citations."""
+    _configure_logging(verbose)
+    client = default_client() if model is None else OllamaClient(model)
+    with DocumentStore.open() as store:
+        retriever = Retriever(store, default_embedder())
+        try:
+            grounded = recall.answer(
+                retriever, client, question, k=k, grain=grain, season=season, team=team
+            )
+        except LLMError as error:
+            typer.echo(str(error), err=True)
+            raise typer.Exit(code=1) from error
+    typer.echo(grounded.render())
+
+
+@app.command("eval-retrieval")
+def eval_retrieval_cmd(
+    output: Output = Path("docs/retrieval_eval.md"),
+    k: TopK = 5,
+    verbose: Verbose = False,
+) -> None:
+    """Score the retrieval golden set, hybrid against each half on its own."""
+    _configure_logging(verbose)
+    with DocumentStore.open() as store:
+        report = retrieval_harness.evaluate(store, default_embedder(), k=k)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report.render())
+    typer.echo(
+        f"hybrid hit@1 {report.hit_at_1():.2f}, recall@{k} {report.recall():.2f}, "
+        f"MRR {report.mrr():.3f}, written to {output}"
     )
 
 
