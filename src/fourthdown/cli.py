@@ -13,6 +13,10 @@ from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, ingest, warehouse
 from fourthdown.evaluation import harness, retrieval_harness
 from fourthdown.llm import LLMError, OllamaClient, default_client
+from fourthdown.models import fourth_down
+from fourthdown.models import train as training
+from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
+from fourthdown.models.winprob import GameState, WinProbabilityModel
 from fourthdown.narrative.render import GRAINS
 from fourthdown.rag import schema_card
 from fourthdown.rag.text_to_sql import TextToSQL
@@ -285,6 +289,74 @@ def eval_retrieval_cmd(
         f"hybrid hit@1 {report.hit_at_1():.2f}, recall@{k} {report.recall():.2f}, "
         f"MRR {report.mrr():.3f}, written to {output}"
     )
+
+
+@app.command("train")
+def train_cmd(
+    output: Output = Path("docs/model_eval.md"),
+    epochs: Annotated[int, typer.Option("--epochs", help="Cap on win-probability epochs.")] = 60,
+    audit_sample: Annotated[
+        int, typer.Option("--audit-sample", help="Held-out fourth downs to replay.")
+    ] = 4000,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Fit win probability, the fourth-down components, and the play-call model."""
+    _configure_logging(verbose)
+    paths = data_paths(data_dir)
+    paths.models.mkdir(parents=True, exist_ok=True)
+    with warehouse.connect(paths) as connection:
+        results = training.run(
+            connection,
+            model_dir=paths.models,
+            max_epochs=epochs,
+            audit_sample=audit_sample,
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(training.report(results))
+    typer.echo(
+        f"win probability log loss {results.win_probability.log_loss:.4f} "
+        f"(ECE {results.win_probability.calibration_error:.4f}), "
+        f"play call {results.play_call.accuracy:.1%} vs "
+        f"{results.play_call_majority.accuracy:.1%} base rate; written to {output}"
+    )
+
+
+@app.command("advise")
+def advise_cmd(
+    yardline: Annotated[int, typer.Option("--yardline", help="Yards from the opponent's goal.")],
+    togo: Annotated[float, typer.Option("--togo", help="Yards to go.")],
+    minutes: Annotated[float, typer.Option("--minutes", help="Minutes left in the game.")] = 15.0,
+    score_diff: Annotated[
+        int, typer.Option("--score-diff", help="Offense score minus defense score.")
+    ] = 0,
+    spread: Annotated[
+        float, typer.Option("--spread", help="Closing spread, signed for the offense.")
+    ] = 0.0,
+    away: Annotated[bool, typer.Option("--away", help="Offense is the visiting team.")] = False,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Rank go / field goal / punt for one fourth down."""
+    _configure_logging(verbose)
+    paths = data_paths(data_dir)
+    weights = paths.models / WP_ARTIFACT
+    components = paths.models / FOURTH_DOWN_ARTIFACT
+    if not weights.exists() or not components.exists():
+        typer.echo(f"no trained models in {paths.models}; run 'fourthdown train' first", err=True)
+        raise typer.Exit(code=1)
+    advisor = fourth_down.load_components(components, WinProbabilityModel.load(weights))
+    state = GameState(
+        yardline_100=float(yardline),
+        down=4,
+        ydstogo=float(togo),
+        game_seconds_remaining=minutes * 60.0,
+        score_differential=float(score_diff),
+        posteam_is_home=not away,
+        posteam_spread=spread,
+        goal_to_go=yardline <= togo,
+    )
+    typer.echo(advisor.recommend(state).render())
 
 
 @app.command()

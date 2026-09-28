@@ -28,6 +28,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Install CPU torch (the default wheel drags in CUDA)
+        run: pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
@@ -42,6 +44,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      - name: Install CPU torch (the default wheel drags in CUDA)
+        run: pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[dev]"
       - name: Build one season end to end
         run: fourthdown build --seasons 2024

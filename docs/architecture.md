@@ -116,6 +116,47 @@ coverage instead took lexical to 0.81 and hybrid past both halves.
 is evidence about *which* game, not the authority on a total. `fourthdown ask` stays the
 path for aggregates; `fourthdown explain` answers from passages and cites them.
 
+## Modelling (phase 04)
+
+**Season-disjoint splits, not random ones.** Every play of a game shares one win/loss
+label, so a random split puts the same outcome on both sides of the line and flatters the
+model. Train is 2009-2018, validation 2019-2020 (early stopping only), test 2021-2024.
+The test range is written open-ended and intersected with the seasons present, so a
+freshly ingested season joins the held-out set rather than the training set.
+
+**The leakage list is enforced in code.** nflfastR ships its own fitted outputs in the
+same table: `wp`, `vegas_wp`, `epa`, `cp`, `cpoe`, `xpass`, `xyac_epa`. Using them as
+features would be training on another model's answer key, so `schema.LEAKAGE_COLUMNS`
+names them and `features.feature_matrix` raises if one appears in a design matrix. They
+are kept for exactly one purpose: scoring them on the same held-out plays as a baseline.
+That is what makes "0.4553 against vegas_wp's 0.4548" a claim rather than a coincidence.
+
+**Calibration is the metric that matters.** A win-probability number is only useful if
+60% means 60%, so the report carries expected calibration error and a ten-bucket
+reliability table alongside log loss, Brier, and AUC. The fourth-down advisor consumes
+probabilities, not rankings; an uncalibrated model with a good AUC would produce
+confident nonsense.
+
+**The advisor is arithmetic over the model, not a fourth model.** Each option is played
+forward into the state it produces and evaluated with the win-probability net:
+
+```
+V(go)     = p_convert * WP(1st and 10, spot) + (1 - p_convert) * (1 - WP(their ball, spot))
+V(kick)   = p_make * (1 - WP(their ball, 25, +3)) + (1 - p_make) * (1 - WP(their ball, spot))
+V(punt)   = 1 - WP(their ball, empirical landing spot)
+```
+
+Possession flips mirror field position, negate the score differential and the spread, and
+swap timeouts and home-field. Because the three numbers are on one scale, the
+recommendation is a win-probability delta with its inputs shown, which is the form a
+coach or an interviewer can argue with.
+
+**Play call earns its keep through the tendency index.** Run/pass accuracy is table
+stakes; the question worth asking is whether being readable costs anything. Readability
+is measured per team-season on early-down neutral-script plays only, so a team that runs
+out a 21-point lead is not scored as predictable, and it is correlated against the same
+team-season's EPA per play.
+
 ## Phase status
 
 | phase | scope | status |
@@ -124,7 +165,7 @@ path for aggregates; `fourthdown explain` answers from passages and cites them.
 | 01 | Polars ETL, Parquet, DuckDB semantic layer | done |
 | 02 | schema card, text-to-SQL, sqlglot guardrails, golden set | done |
 | 03 | narrative corpus, embeddings, hybrid retrieval | done |
-| 04 | win probability, 4th-down advisor, play-call model | next |
-| 05 | orchestrator, Flask API, React dashboard | planned |
+| 04 | win probability, 4th-down advisor, play-call model | done |
+| 05 | orchestrator, Flask API, React dashboard | next |
 | 06 | evaluation harness in CI | planned |
 | 07 | Docker, then Helm on a local Kubernetes cluster | planned |

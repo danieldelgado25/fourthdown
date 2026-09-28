@@ -35,6 +35,10 @@ class Paths:
     def database(self) -> Path:
         return self.warehouse / "fourthdown.duckdb"
 
+    @property
+    def models(self) -> Path:
+        return self.root / "models"
+
     def season_raw(self, season: int) -> Path:
         return self.raw / f"play_by_play_{season}.parquet"
 
@@ -42,7 +46,7 @@ class Paths:
         return self.processed / f"season={season}" / "plays.parquet"
 
     def ensure(self) -> None:
-        for directory in (self.raw, self.processed, self.warehouse):
+        for directory in (self.raw, self.processed, self.warehouse, self.models):
             directory.mkdir(parents=True, exist_ok=True)
 
 
