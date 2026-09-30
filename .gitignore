@@ -10,3 +10,5 @@ __pycache__/
 *.duckdb.wal
 .env
 .DS_Store
+node_modules/
+web/dist/

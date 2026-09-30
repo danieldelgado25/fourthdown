@@ -1,0 +1,25 @@
+[
+  {"question": "How many touchdown passes did Aaron Rodgers throw in 2020?", "tool": "stats"},
+  {"question": "Which team had the highest EPA per play in 2023?", "tool": "stats"},
+  {"question": "What is the league-wide fourth down conversion rate since 2015?", "tool": "stats"},
+  {"question": "Compare red zone touchdown rate for the Chiefs and the Bills in 2022", "tool": "stats"},
+  {"question": "How many plays are in the warehouse?", "tool": "stats"},
+  {"question": "Who led the league in rushing yards in 2019?", "tool": "stats"},
+
+  {"question": "What happened in the 2017 Super Bowl between the Patriots and the Falcons?", "tool": "narrative"},
+  {"question": "Tell me about the Vikings' last drive in the 2017 divisional round", "tool": "narrative"},
+  {"question": "How did the Colts blow their lead against the Vikings in 2022?", "tool": "narrative"},
+  {"question": "Describe the wildest comeback of the 2022 season", "tool": "narrative"},
+  {"question": "What happened at the end of the 2018 NFC championship game?", "tool": "narrative"},
+
+  {"question": "Should the Ravens go for it on 4th and 2 from the 38 down 3 with four minutes left?", "tool": "advisor"},
+  {"question": "It is 4th and 1 at the 45 in a tie game with two minutes left, do I punt?", "tool": "advisor"},
+  {"question": "4th and goal from the 3, down 5 with 30 seconds left: field goal or go?", "tool": "advisor"},
+  {"question": "Is it worth going for it on fourth and 4 from the 40?", "tool": "advisor"},
+
+  {"question": "How pass heavy were the Lions in 2023?", "tool": "tendency"},
+  {"question": "Which team is the most predictable on early downs in 2024?", "tool": "tendency"},
+  {"question": "What is the neutral script pass rate for the Ravens in 2022?", "tool": "tendency"},
+  {"question": "How often do the Titans run the ball in neutral situations?", "tool": "tendency"},
+  {"question": "Show me team run pass tendencies for 2021", "tool": "tendency"}
+]

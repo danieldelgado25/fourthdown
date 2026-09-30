@@ -157,6 +157,37 @@ is measured per team-season on early-down neutral-script plays only, so a team t
 out a 21-point lead is not scored as predictable, and it is correlated against the same
 team-season's EPA per play.
 
+## Serving (phase 05)
+
+**Routing is a two-tier decision, not a prompt.** The LLM is asked for exactly one tool
+name from the catalog of tools that actually loaded; a keyword router sits underneath it
+and answers whenever the model is unreachable, returns prose, or names a tool that does
+not exist. Both are measured against the same labelled question set
+([routing_eval.md](routing_eval.md)), and they score the same 19/20 — which is the point:
+the fallback is not a degraded mode, it is a cheap router the LLM has to beat.
+
+**Tools return evidence, not prose.** Every tool produces the same envelope — an answer
+line, an optional table, retrieved passages, and a detail map — so the API contract does
+not change shape per tool and the dashboard renders provenance uniformly: the SQL that
+produced a table, the passages behind a narrative claim, the win probability of each
+fourth-down option. Nothing the LLM writes carries a number the tools did not compute.
+
+**A situation is parsed, never guessed.** The advisor needs a game state, so the
+question is parsed for distance, field position, clock, and margin; if distance or field
+position is missing the tool says what it needs instead of inventing a plausible fourth
+down. Numbers are the one thing the pipeline is not allowed to hallucinate.
+
+**Every dependency is optional.** Services are opened once at startup, each failure is
+recorded rather than raised, and the tool catalog is whatever came up. No Postgres means
+no narrative tool; no artifacts means no advisor; no Ollama means keyword routing and no
+SQL authoring. `/api/health` reports the state and the reason, and the dashboard disables
+what it cannot reach — a fresh clone with nothing built still starts and explains itself.
+
+The flip side of holding a DuckDB connection, a pgvector pool, and a torch checkpoint for
+the process lifetime is that the app is single-worker by design. Multi-worker serving
+(gunicorn with preload, or the model behind its own server) belongs with the container
+work in phase 07.
+
 ## Phase status
 
 | phase | scope | status |
@@ -166,6 +197,6 @@ team-season's EPA per play.
 | 02 | schema card, text-to-SQL, sqlglot guardrails, golden set | done |
 | 03 | narrative corpus, embeddings, hybrid retrieval | done |
 | 04 | win probability, 4th-down advisor, play-call model | done |
-| 05 | orchestrator, Flask API, React dashboard | next |
-| 06 | evaluation harness in CI | planned |
+| 05 | orchestrator, Flask API, React dashboard | done |
+| 06 | evaluation harness in CI | next |
 | 07 | Docker, then Helm on a local Kubernetes cluster | planned |
