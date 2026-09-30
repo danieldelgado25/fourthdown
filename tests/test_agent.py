@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from conftest import ScriptedClient
 
 from fourthdown.agent.assistant import Assistant
 from fourthdown.agent.parse import parse_season, parse_state, parse_team
@@ -8,7 +9,6 @@ from fourthdown.agent.router import KeywordRouter, LLMRouter
 from fourthdown.agent.tools import Evidence, Table, TendencyTool
 from fourthdown.evaluation import routing_harness
 from fourthdown.llm import LLMError
-from tests.conftest import ScriptedClient
 
 
 class RecordingTool:
