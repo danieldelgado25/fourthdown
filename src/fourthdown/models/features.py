@@ -88,6 +88,31 @@ random split measures memorisation. Splitting by season also matches how the mod
 be used: fit on the past, asked about a season it has never seen.
 """
 
+
+@dataclass(frozen=True)
+class SeasonSplit:
+    """Which seasons fit, early-stop, and score a model, in that time order."""
+
+    train: tuple[int, ...]
+    valid: tuple[int, ...]
+    test: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if not (self.train and self.valid and self.test):
+            raise ValueError("every split needs at least one season")
+        if max(self.train) >= min(self.valid) or max(self.valid) >= min(self.test):
+            raise ValueError(
+                "splits must be season-disjoint and in time order: "
+                f"train {sorted(self.train)}, valid {sorted(self.valid)}, test {sorted(self.test)}"
+            )
+
+
+DEFAULT_SPLIT = SeasonSplit(
+    train=tuple(DEFAULT_TRAIN_SEASONS),
+    valid=tuple(DEFAULT_VALID_SEASONS),
+    test=tuple(DEFAULT_TEST_SEASONS),
+)
+
 BASE_SQL = """
 SELECT
     game_id,

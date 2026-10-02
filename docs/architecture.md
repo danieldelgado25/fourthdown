@@ -188,6 +188,46 @@ the process lifetime is that the app is single-worker by design. Multi-worker se
 (gunicorn with preload, or the model behind its own server) belongs with the container
 work in phase 07.
 
+## Evaluation in CI (phase 06)
+
+Every harness from phases 02-05 now feeds one scorecard (`fourthdown scorecard`) that
+compares each metric with a bound in `src/fourthdown/evaluation/gates.json`. Each bound
+records why it is there, so a failing build explains itself.
+
+**Gates are bands, not just floors.** A held-out win-probability AUC above 0.95, or a
+run/pass AUC above 0.92, is not a better model. It means a leaked feature, so the gate
+fails it. The advisor's go-for-it rate is bounded on both sides as well, because an
+advisor that always goes for it, or never does, can still agree with coaches often
+enough to look fine.
+
+**The suites split by what they need.**
+
+| suite | needs | where it runs |
+| --- | --- | --- |
+| guard: 36 adversarial queries, legitimate queries, row caps | nothing | every PR |
+| routing_keyword | nothing | every PR |
+| references: every golden reference query runs on the warehouse | warehouse | every PR |
+| models: retrain all three models from scratch and score them | warehouse | every PR |
+| text_to_sql, routing_llm | Ollama with `qwen2.5-coder:7b` | weekly, on demand, or with the `eval-llm` PR label |
+| retrieval | Postgres index and `nomic-embed-text` | locally (`make scorecard`) |
+
+On every PR the models are retrained rather than loaded from checked-in artifacts. That
+checks the pipeline still produces a good model, not that an old file is still on disk.
+A suite that cannot run is skipped with a reason. CI passes `--require` for the suites it
+expects, so a missing dependency fails the job instead of being reported as a pass.
+
+Retrieval is kept out of CI on purpose. Indexing only the games the golden set asks
+about would make search much easier than against the full index. CI would then report
+inflated hit@1 for a smaller corpus, and that number would be misleading.
+
+**The guard suite found real bypasses.** Before this phase the guard checked table names
+against the allowed views, but it had no rule for table functions. A query could read a
+file in one branch of a UNION as long as another branch read `games`. 11 of the 36
+adversarial queries got through: `read_text`, `read_blob`, `sniff_csv`, `sqlite_scan`,
+`query()`, `duckdb_tables()`, `range()`, `current_setting()`, and views qualified with
+another catalog or schema. The guard now rejects every FROM source that is not a plain
+view name in the warehouse schema.
+
 ## Phase status
 
 | phase | scope | status |
@@ -198,5 +238,5 @@ work in phase 07.
 | 03 | narrative corpus, embeddings, hybrid retrieval | done |
 | 04 | win probability, 4th-down advisor, play-call model | done |
 | 05 | orchestrator, Flask API, React dashboard | done |
-| 06 | evaluation harness in CI | next |
-| 07 | Docker, then Helm on a local Kubernetes cluster | planned |
+| 06 | evaluation harness in CI | done |
+| 07 | Docker, then Helm on a local Kubernetes cluster | next |

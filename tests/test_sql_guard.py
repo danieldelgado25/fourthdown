@@ -71,6 +71,35 @@ def test_rejects_filesystem_access(sql: str) -> None:
         guard.validate(sql)
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT game_id FROM games UNION ALL SELECT content FROM read_text('/etc/passwd')",
+        "SELECT p.season FROM plays p CROSS JOIN read_blob('/etc/hostname') b",
+        "SELECT count(*) FROM plays, range(1000000000)",
+        "SELECT * FROM plays, duckdb_tables()",
+    ],
+)
+def test_rejects_table_functions_alongside_a_real_view(sql: str) -> None:
+    with pytest.raises(guard.UnsafeSQLError, match="not allowed"):
+        guard.validate(sql)
+
+
+@pytest.mark.parametrize("sql", ["SELECT * FROM other.main.plays", "SELECT * FROM scratch.plays"])
+def test_rejects_views_qualified_with_another_schema(sql: str) -> None:
+    with pytest.raises(guard.UnsafeSQLError, match="outside the warehouse"):
+        guard.validate(sql)
+
+
+def test_accepts_the_default_schema_qualifier() -> None:
+    assert guard.validate("SELECT count(*) FROM main.plays").tables == frozenset({"plays"})
+
+
+def test_rejects_configuration_reads() -> None:
+    with pytest.raises(guard.UnsafeSQLError, match="current_setting"):
+        guard.validate("SELECT current_setting('home_directory') FROM plays")
+
+
 def test_rejects_a_query_that_reads_no_view() -> None:
     with pytest.raises(guard.UnsafeSQLError):
         guard.validate("SELECT 1")
