@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 from mlflow.tracking import MlflowClient
 
 from fourthdown.data import provenance
@@ -32,7 +33,12 @@ def manifest():
 @pytest.fixture()
 def model_dir(tmp_path, manifest):
     directory = tmp_path / "models"
-    model = WinProbabilityModel(features.WP_FEATURES, WinProbabilityNet(len(features.WP_FEATURES)))
+    torch.manual_seed(0)
+    net = WinProbabilityNet(len(features.WP_FEATURES))
+    with torch.no_grad():
+        for parameter in net.parameters():
+            parameter.mul_(1e-3)
+    model = WinProbabilityModel(features.WP_FEATURES, net)
     model.save(directory / "winprob.pt")
     card = ModelCard.build(
         artifact=directory / "winprob.pt",
