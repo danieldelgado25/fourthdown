@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 from conftest import ScriptedClient
 
+from fourthdown.evaluation import harness
 from fourthdown.rag import text_to_sql
 from fourthdown.rag.text_to_sql import TextToSQL
+from fourthdown.sql import guard
 
 
 @pytest.mark.parametrize(
@@ -105,3 +107,55 @@ def test_caps_returned_rows(views_connection) -> None:
     client = ScriptedClient("SELECT * FROM plays")
     answer = TextToSQL(views_connection, client, max_rows=2).answer("Show me the plays")
     assert len(answer.rows) == 2
+
+
+def test_prompt_carries_worked_examples(views_connection) -> None:
+    client = ScriptedClient("SELECT count(*) FROM plays")
+    TextToSQL(views_connection, client).answer("How many plays are there?")
+    assert "Examples:" in client.prompts[0]
+    assert text_to_sql.EXEMPLARS[0][1] in client.prompts[0]
+
+
+def test_every_exemplar_passes_the_guard_and_runs(views_connection) -> None:
+    for _, sql in text_to_sql.EXEMPLARS:
+        if sql == text_to_sql.UNANSWERABLE:
+            continue
+        views_connection.execute(guard.validate(sql).sql).fetchall()
+
+
+def test_exemplars_are_not_golden_questions() -> None:
+    golden = harness.load_questions() + harness.load_questions(holdout=True)
+    references = {" ".join((q.reference_sql or "").lower().split()) for q in golden}
+    for question, sql in text_to_sql.EXEMPLARS:
+        assert question not in {q.question for q in golden}
+        assert " ".join(sql.lower().split()) not in references
+
+
+def test_repair_prompt_carries_every_failed_attempt(views_connection) -> None:
+    client = ScriptedClient(
+        "SELECT count(*) FROM nope",
+        "SELECT count(*) FROM nada",
+        "SELECT count(*) FROM plays",
+    )
+    TextToSQL(views_connection, client).answer("How many plays?")
+    assert "FROM nope" in client.prompts[2]
+    assert "FROM nada" in client.prompts[2]
+    assert "Examples:" not in client.prompts[1]
+
+
+def test_repair_names_the_view_a_borrowed_column_belongs_to(views_connection) -> None:
+    client = ScriptedClient(
+        "SELECT count(*) FROM drives WHERE field_zone = 'red_zone'",
+        "SELECT count(*) FROM drives",
+    )
+    TextToSQL(views_connection, client).answer("How many red zone drives?")
+    assert "field_zone is only a column of plays" in client.prompts[1]
+
+
+def test_repair_says_when_a_column_exists_nowhere(views_connection) -> None:
+    client = ScriptedClient(
+        "SELECT count(*) FROM plays WHERE made_up_column = 1",
+        "SELECT count(*) FROM plays",
+    )
+    TextToSQL(views_connection, client).answer("How many plays?")
+    assert "made_up_column is not a column of any view" in client.prompts[1]

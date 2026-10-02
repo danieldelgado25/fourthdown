@@ -21,8 +21,15 @@ VIEW_PURPOSE: dict[str, str] = {
     "plays": ("One row per play, the grain everything else aggregates. Regular and post season."),
     "games": "One row per game with final score, venue, weather, and betting lines.",
     "drives": "One row per drive with starting field position, result, and EPA.",
-    "team_game": "One row per team per game: pass rate, EPA splits, situational conversions.",
-    "player_game": "One row per player per game per role ('passer', 'rusher', 'receiver').",
+    "team_game": (
+        "One row per team per game: pass rate, EPA splits, situational conversions. Rates "
+        "here are per game; compute a season rate from plays rather than averaging them."
+    ),
+    "player_game": (
+        "One row per player per game per role ('passer', 'rusher', 'receiver'). Season "
+        "figures need GROUP BY player_name with sum(), and play minimums go in "
+        "HAVING sum(plays) >= N."
+    ),
 }
 
 # Only the columns whose meaning is not obvious from the name, or that are easy to misuse.
@@ -61,7 +68,7 @@ COLUMN_NOTES: dict[str, str] = {
         "raw nflverse type: 'pass', 'run', 'punt', 'field_goal', 'kickoff', 'extra_point', "
         "'qb_kneel', 'qb_spike', 'no_play' (penalty), or NULL for administrative rows"
     ),
-    "home_margin": "home_score - away_score",
+    "home_margin": "home_score - away_score; the home team won when home_margin > 0",
     "neutral_pass_rate": "pass rate restricted to neutral game script",
     "role": "'passer', 'rusher', or 'receiver'",
     "cpoe": "completion percentage over expected, passers only",
@@ -72,7 +79,15 @@ COLUMN_NOTES: dict[str, str] = {
 VIEW_COLUMN_NOTES: dict[tuple[str, str], str] = {
     ("drives", "epa"): "total EPA of the drive",
     ("drives", "posteam"): "team on offense for the drive",
-    ("player_game", "plays"): "plays in which the player filled this role",
+    ("drives", "start_yardline_100"): "yards from the opponent's goal line: 80 = own 20",
+    ("drives", "end_yardline_100"): (
+        "where the drive finished; <= 20 means it reached the red zone (drives has no field_zone)"
+    ),
+    ("drives", "scored_touchdown"): "the offense scored; pick-sixes and return TDs do not count",
+    ("player_game", "plays"): "plays in this game in which the player filled this role",
+    ("player_game", "epa_per_play"): (
+        "for this game only; a season value is sum(epa_per_play * plays) / sum(plays)"
+    ),
     ("player_game", "yards"): "yards gained on those plays, not official passing/rushing yards",
     ("team_game", "plays"): "all plays including special teams; designed_plays excludes them",
 }
@@ -119,6 +134,20 @@ PLAYS_HIGHLIGHT: tuple[str, ...] = (
     "posteam_won",
 )
 
+GLOSSARY = """\
+Football terms:
+- third and long: down = 3 AND distance_bucket IN ('long', 'very_long').
+- a fourth-down attempt, or going for it: down = 4 AND is_designed_play. Punts and
+  field goals are not attempts.
+- a designed run, run call, or rushing play called: is_designed_play AND NOT
+  is_pass_call. This already excludes kneels and scrambles.
+- red zone: field_zone = 'red_zone' on plays, end_yardline_100 <= 20 on drives.
+- Teams: ARI Cardinals, ATL Falcons, BAL Ravens, BUF Bills, CAR Panthers, CHI Bears,
+  CIN Bengals, CLE Browns, DAL Cowboys, DEN Broncos, DET Lions, GB Packers, HOU Texans,
+  IND Colts, JAX Jaguars, KC Chiefs, LA Rams, LAC Chargers, LV Raiders, MIA Dolphins,
+  MIN Vikings, NE Patriots, NO Saints, NYG Giants, NYJ Jets, PHI Eagles, PIT Steelers,
+  SEA Seahawks, SF 49ers, TB Buccaneers, TEN Titans, WAS Commanders."""
+
 RULES = """\
 Rules:
 - DuckDB SQL, one SELECT statement, no semicolon, no DDL or DML.
@@ -129,8 +158,18 @@ Rules:
 - Team abbreviations are the current ones for all history: use LAC (not SD), LA (not
   STL), LV (not OAK), JAX, WAS, ARI.
 - The season is the year it started: the February 2024 Super Bowl is season 2023.
-- Rates are averages of booleans: `avg(is_pass_call::INT)`.
-- Add ORDER BY and LIMIT when the question asks for the most, fewest, or a ranking."""
+- Filter on every team, season, down, and situation the question names.
+- Count plays with count(*) on plays; only the other views have a `plays` column.
+- team_game and player_game rates are per game. For a team's season rate, compute it
+  from plays grouped by posteam, never avg() of a per-game rate.
+- Rates are averages of booleans cast to INT: `avg(is_pass_call::INT)`. Wrap a
+  comparison in parentheses before casting: `avg((yards_gained >= 10)::INT)`.
+- Add ORDER BY and LIMIT when the question asks for the most, fewest, or a ranking.
+- To find the row with an extreme value (coldest game, top passer), ORDER BY that value
+  with LIMIT 1 and select its identifying column (game_id, team, player_name) beside it.
+  Never pair independent MIN() or MAX() aggregates.
+- To compare one situation with another or with the rest, GROUP BY the flag or
+  expression that separates them and return one row per group."""
 
 
 @dataclass(frozen=True)
@@ -204,4 +243,4 @@ def build(connection: duckdb.DuckDBPyConnection) -> str:
         raise RuntimeError("could not read warehouse coverage")
     first_season, last_season, plays = coverage
     header = f"Warehouse: {plays:,} plays, seasons {first_season}-{last_season}."
-    return "\n\n".join([header, *blocks, RULES])
+    return "\n\n".join([header, *blocks, GLOSSARY, RULES])

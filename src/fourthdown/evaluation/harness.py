@@ -25,6 +25,8 @@ import duckdb
 from fourthdown.rag.text_to_sql import SQLAnswer, TextToSQL
 
 FLOAT_PRECISION = 4
+DEV_FILE = "golden.json"
+HOLDOUT_FILE = "golden_holdout.json"
 
 
 @dataclass(frozen=True)
@@ -68,9 +70,9 @@ class EvaluationReport:
     def repairs(self) -> int:
         return sum(max(len(result.answer.attempts) - 1, 0) for result in self.results)
 
-    def render(self) -> str:
+    def render(self, title: str = "Text-to-SQL evaluation") -> str:
         lines = [
-            "# Text-to-SQL evaluation",
+            f"# {title}",
             "",
             f"- questions: {self.total}",
             f"- produced a runnable query: {self.executed}/{self.total}",
@@ -87,10 +89,15 @@ class EvaluationReport:
         return "\n".join(lines) + "\n"
 
 
-def load_questions(path: Path | None = None) -> list[GoldenQuestion]:
-    """Read the golden set, from the packaged file unless a path is given."""
+def load_questions(path: Path | None = None, *, holdout: bool = False) -> list[GoldenQuestion]:
+    """Read a golden set, from the packaged file unless a path is given.
+
+    The development set is what prompt changes are tuned against; the holdout set is
+    scored but never tuned on, so it shows whether a change generalises.
+    """
     if path is None:
-        text = resources.files("fourthdown.evaluation").joinpath("golden.json").read_text()
+        name = HOLDOUT_FILE if holdout else DEV_FILE
+        text = resources.files("fourthdown.evaluation").joinpath(name).read_text()
     else:
         text = path.read_text()
     payload = json.loads(text)

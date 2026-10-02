@@ -156,17 +156,22 @@ def references_suite(connection: duckdb.DuckDBPyConnection) -> SuiteResult:
 
 
 def text_to_sql_suite(connection: duckdb.DuckDBPyConnection, client: OllamaClient) -> SuiteResult:
-    report = harness.evaluate(connection, TextToSQL(connection, client))
+    chain = TextToSQL(connection, client)
+    report = harness.evaluate(connection, chain)
+    holdout = harness.evaluate(connection, chain, harness.load_questions(holdout=True))
     return SuiteResult(
         TEXT_TO_SQL,
         metrics={
             "correct": _fraction(report.correct, report.total),
             "runnable": _fraction(report.executed, report.total),
             "repairs_per_question": _fraction(report.repairs, report.total),
+            "holdout_correct": _fraction(holdout.correct, holdout.total),
+            "holdout_runnable": _fraction(holdout.executed, holdout.total),
         },
         findings=tuple(
-            f"`{result.question.id}`: {result.detail}"
-            for result in report.results
+            f"`{result.question.id}`{' (holdout)' if split else ''}: {result.detail}"
+            for split, results in ((False, report.results), (True, holdout.results))
+            for result in results
             if not result.correct
         ),
     )

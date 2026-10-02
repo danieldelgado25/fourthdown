@@ -47,17 +47,19 @@ Text-to-SQL runs against a local [Ollama](https://ollama.com) model
 ollama pull qwen2.5-coder:7b
 fourthdown schema-card                       # the prompt the model sees
 fourthdown ask "Which team passed most on neutral downs in 2024?"
-fourthdown eval                              # score the golden set -> docs/text_to_sql_eval.md
+fourthdown eval                              # score the dev set -> docs/text_to_sql_eval.md
+fourthdown eval --holdout -o docs/text_to_sql_holdout_eval.md   # score the held-out set
 ```
 
 Every generated query is parsed with sqlglot before it reaches DuckDB: one read-only
 SELECT, only the five semantic views, no filesystem functions, and a `LIMIT` is imposed.
 Rejections and DuckDB errors are fed back to the model for a bounded number of repairs.
 Accuracy is measured by executing the golden questions and comparing results with
-handwritten reference SQL, not by matching query text. `qwen2.5-coder:7b` currently
-produces a runnable query for 14 of the 15 golden questions and the right answer for 7;
-the failures are logged per question in
-[docs/text_to_sql_eval.md](docs/text_to_sql_eval.md).
+handwritten reference SQL, not by matching query text. The prompt was tuned on a
+15-question development set and checked on 15 held-out questions it never saw:
+`qwen2.5-coder:7b` went from 7/15 to 14/15 correct on development and from 3/15 to 9/15
+on held-out. Per-question results are in [docs/text_to_sql_eval.md](docs/text_to_sql_eval.md)
+and [docs/text_to_sql_holdout_eval.md](docs/text_to_sql_holdout_eval.md).
 
 ## Narrative retrieval
 
