@@ -127,6 +127,37 @@ plays. The analytics payoff is the per-team readability index it produces — ho
 model's call was the call, on early-down neutral-script plays only, so game script is not
 mistaken for tendency. Full numbers in [docs/model_eval.md](docs/model_eval.md).
 
+## Provenance, experiment tracking, and the model container
+
+```bash
+fourthdown lineage --verify      # rehash data/ against data/manifest.json -> docs/lineage.md
+fourthdown train                 # refuses drifted data; logs the run to MLflow
+make mlflow-ui                   # browse runs at http://127.0.0.1:5000
+make wp-image && make wp-run     # the win-probability model on http://127.0.0.1:8080
+```
+
+Every build step hashes what it writes. The raw nflverse files, the processed partitions,
+and the SQL of each view all go into `data/manifest.json`, together with the source URL
+and the raw file each partition came from. They fold into one `data_version`. Every
+training run logs that version, the season split, every hyperparameter, the metrics, and
+the loss curve to MLflow, and writes a model card next to the weights. The container
+serves those weights and refuses to start if their hash doesn't match the card. Every
+prediction reports the data version and MLflow run that produced the model:
+
+```bash
+curl -s localhost:8080/v1/win-probability -H 'content-type: application/json' -d '{
+  "yardline_100": 45, "down": 2, "ydstogo": 7,
+  "game_seconds_remaining": 900, "score_differential": 3,
+  "posteam_spread": -2.5, "posteam_is_home": true
+}'
+# {"win_probability": 0.7..., "model": {"data_version": "1e7d18214c2c",
+#   "mlflow_run_id": "...", "artifact_sha256": "...", "git_commit": "..."}}
+```
+
+`{"states": [...]}` scores up to 1,000 situations at once. `GET /v1/model` returns the
+card (features, split, held-out metrics), and `GET /health` is the container healthcheck.
+Lineage tables are in [docs/lineage.md](docs/lineage.md).
+
 ## The assistant, the API, and the dashboard
 
 One question, four tools. The router picks one and says why; the tool does the work and
@@ -187,6 +218,7 @@ src/fourthdown/
   config.py           path resolution (override the data root with FOURTHDOWN_DATA_DIR)
   data/
     ingest.py         nflverse release downloader, incremental and resumable
+    provenance.py     per-file SHA-256, table lineage, data_version, drift checks
     schema.py         the processed column contract, including the leakage list
     etl.py            lazy Polars pipeline -> season-partitioned Parquet
     warehouse.py      DuckDB views: plays, games, drives, team_game, player_game
@@ -211,6 +243,9 @@ src/fourthdown/
     playcall.py       run-pass GBM and the team predictability index
     metrics.py        log loss, Brier, AUC, calibration error, reliability bins
     train.py          fits all three, writes artifacts and docs/model_eval.md
+    card.py           model card: artifact hash, data version, split, metrics, run id
+    tracking.py       MLflow run logging (SQLite store under data/mlflow by default)
+  serving/winprob.py  standalone win-probability API, the container's entrypoint
   evaluation/
     golden.json       15 questions with reference SQL, including traps and one refusal
     harness.py        result-level scoring and the Markdown report
@@ -242,6 +277,9 @@ docs/
   model_eval.md       generated: held-out model metrics, calibration, predictability
   routing_eval.md     generated: routing accuracy, keyword vs LLM
   scorecard.md        generated: every suite against its gates
+  lineage.md          generated: data version, per-table sources and hashes
+docker/
+  winprob.Dockerfile  CPU-only image with the trained model and its card baked in
 ```
 
 ## Data

@@ -1,11 +1,15 @@
 SEASONS ?= 2009-2024
 
 PORT ?= 8000
+WP_PORT ?= 8080
+WP_IMAGE ?= fourthdown-winprob
+BASE_IMAGE ?= python:3.11-slim
 
 CI_SUITES ?= guard,routing_keyword,references,models
 
 .PHONY: install format lint typecheck test ingest etl warehouse build audit index train \
-	eval-routing scorecard scorecard-ci serve web-install web web-test clean
+	eval-routing scorecard scorecard-ci serve lineage verify-data mlflow-ui wp-image wp-run \
+	web-install web web-test clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -39,6 +43,29 @@ audit:
 
 train:
 	fourthdown train --output docs/model_eval.md
+
+lineage:
+	fourthdown lineage --output docs/lineage.md
+
+verify-data:
+	fourthdown lineage --verify --output docs/lineage.md
+
+mlflow-ui:
+	mlflow ui --backend-store-uri sqlite:///data/mlflow/mlflow.db
+
+# One image per trained model, tagged with the data version it was trained on.
+wp-image:
+	$(eval CARD := data/models/model_card.json)
+	$(eval DATA_VERSION := $(shell python -c "import json;print(json.load(open('$(CARD)'))['data_version'])"))
+	$(eval RUN_ID := $(shell python -c "import json;print(json.load(open('$(CARD)'))['mlflow_run_id'] or 'untracked')"))
+	docker build -f docker/winprob.Dockerfile \
+		--build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		--build-arg DATA_VERSION=$(DATA_VERSION) --build-arg MLFLOW_RUN_ID=$(RUN_ID) \
+		--build-arg GIT_COMMIT=$(shell git rev-parse HEAD) \
+		-t $(WP_IMAGE):$(DATA_VERSION) -t $(WP_IMAGE):latest .
+
+wp-run:
+	docker run --rm -p $(WP_PORT):8080 $(WP_IMAGE):latest
 
 index:
 	docker compose up -d

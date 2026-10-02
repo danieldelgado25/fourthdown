@@ -15,7 +15,7 @@ from pathlib import Path
 import polars as pl
 
 from fourthdown.config import Paths, data_paths
-from fourthdown.data import schema
+from fourthdown.data import provenance, schema
 
 LOGGER = logging.getLogger(__name__)
 
@@ -188,6 +188,7 @@ def transform_season(season: int, paths: Paths | None = None) -> Path:
     LOGGER.info("transforming season %s", season)
     table = transform(pl.scan_parquet(source)).collect()
     table.write_parquet(destination, compression="zstd", statistics=True)
+    provenance.record_partition(resolved, season, rows=table.height)
     LOGGER.info("wrote %s rows to %s", table.height, destination)
     return destination
 

@@ -14,6 +14,7 @@ from pathlib import Path
 import requests
 
 from fourthdown.config import DEFAULT_FIRST_SEASON, FIRST_SEASON, Paths, data_paths
+from fourthdown.data import provenance
 
 LOGGER = logging.getLogger(__name__)
 
@@ -69,20 +70,26 @@ def parse_seasons(spec: str, *, latest: int | None = None) -> list[int]:
 def download_season(season: int, paths: Paths, *, force: bool = False) -> Path:
     """Fetch one season to ``paths.raw``, returning the local path."""
     destination = paths.season_raw(season)
+    url = season_url(season)
     if destination.exists() and not force:
         LOGGER.info("season %s already present at %s", season, destination)
+        provenance.record_raw(paths, season, url=url, downloaded=False)
         return destination
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(".parquet.part")
-    url = season_url(season)
     LOGGER.info("downloading season %s from %s", season, url)
     with requests.get(url, stream=True, timeout=TIMEOUT) as response:
         response.raise_for_status()
         with partial.open("wb") as handle:
             for chunk in response.iter_content(CHUNK_SIZE):
                 handle.write(chunk)
+        etag = response.headers.get("ETag")
+        last_modified = response.headers.get("Last-Modified")
     partial.replace(destination)
+    provenance.record_raw(
+        paths, season, url=url, downloaded=True, etag=etag, last_modified=last_modified
+    )
     return destination
 
 

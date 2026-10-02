@@ -14,6 +14,7 @@ from pathlib import Path
 import duckdb
 
 from fourthdown.config import Paths, data_paths
+from fourthdown.data import provenance
 
 LOGGER = logging.getLogger(__name__)
 
@@ -158,6 +159,16 @@ VIEW_STATEMENTS: tuple[str, ...] = (
 )
 
 
+VIEW_SQL: dict[str, str] = {
+    "plays": PLAYS_VIEW,
+    **dict(zip(VIEW_NAMES[1:], VIEW_STATEMENTS, strict=True)),
+}
+VIEW_READS: dict[str, tuple[str, ...]] = {
+    "plays": (provenance.PROCESSED_SOURCE,),
+    **{name: ("plays",) for name in VIEW_NAMES[1:]},
+}
+
+
 def processed_glob(paths: Paths) -> str:
     return str(paths.processed / "season=*" / "*.parquet")
 
@@ -184,6 +195,8 @@ def build(paths: Paths | None = None, *, database: Path | None = None) -> Path:
         create_views(connection, resolved)
         rows = connection.execute("SELECT count(*) FROM plays").fetchone()
         LOGGER.info("warehouse at %s covers %s plays in %d seasons", target, rows, len(partitions))
+    manifest = provenance.record_views(resolved, VIEW_SQL, VIEW_READS)
+    LOGGER.info("data version %s", manifest.data_version)
     return target
 
 

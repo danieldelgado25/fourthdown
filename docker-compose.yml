@@ -15,5 +15,14 @@ services:
       timeout: 5s
       retries: 10
 
+  winprob:
+    profiles: ["winprob"]
+    build:
+      context: .
+      dockerfile: docker/winprob.Dockerfile
+    image: fourthdown-winprob:latest
+    ports:
+      - "8080:8080"
+
 volumes:
   pgdata:

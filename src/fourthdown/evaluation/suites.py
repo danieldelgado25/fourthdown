@@ -218,26 +218,9 @@ def models_suite(
             audit_sample=audit_sample,
             split=split,
         )
-    wp, call = results.win_probability, results.play_call
-    metrics = {
-        "wp_log_loss": wp.log_loss,
-        "wp_brier": wp.brier,
-        "wp_auc": wp.auc,
-        "wp_ece": wp.calibration_error,
-        "playcall_accuracy": call.accuracy,
-        "playcall_auc": call.auc,
-        "playcall_lift_over_majority": call.accuracy - results.play_call_majority.accuracy,
-        "advisor_agreement": results.audit.agreement,
-        "advisor_go_rate": results.audit.model_go_rate,
-        "coach_go_rate": results.audit.coach_go_rate,
-    }
-    if results.vegas_baseline is not None:
-        metrics["wp_log_loss_gap_vs_vegas"] = wp.log_loss - results.vegas_baseline.log_loss
-    if results.play_call_xpass is not None:
-        metrics["playcall_lift_over_xpass"] = call.accuracy - results.play_call_xpass.accuracy
     return SuiteResult(
         MODELS,
-        metrics=metrics,
+        metrics=training.summary_metrics(results),
         findings=(
             f"win probability: {results.wp_dataset.summary()}",
             f"play call: {results.playcall_dataset.summary()}",

@@ -13,11 +13,12 @@ from fourthdown.agent import build as agent_build
 from fourthdown.agent.router import KeywordRouter, LLMRouter
 from fourthdown.api import create_app
 from fourthdown.config import data_paths
-from fourthdown.data import audit, etl, ingest, warehouse
+from fourthdown.data import audit, etl, ingest, provenance, warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness, scorecard, suites
 from fourthdown.llm import LLMError, OllamaClient, default_client
-from fourthdown.models import fourth_down, winprob
+from fourthdown.models import fourth_down, tracking, winprob
 from fourthdown.models import train as training
+from fourthdown.models.card import MODEL_CARD, ModelCard
 from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
 from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
 from fourthdown.models.winprob import GameState, WinProbabilityModel
@@ -25,6 +26,7 @@ from fourthdown.narrative.render import GRAINS
 from fourthdown.rag import schema_card
 from fourthdown.rag.text_to_sql import TextToSQL
 from fourthdown.retrieval import DocumentStore, Retriever, default_embedder, index, recall
+from fourthdown.serving import winprob as wp_service
 
 app = typer.Typer(help="FourthDown data pipeline", no_args_is_help=True)
 
@@ -388,6 +390,29 @@ def scorecard_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("lineage")
+def lineage_cmd(
+    output: Output = Path("docs/lineage.md"),
+    verify: Annotated[
+        bool, typer.Option("--verify", help="Rehash every file and fail on any drift.")
+    ] = False,
+    data_dir: DataDir = None,
+) -> None:
+    """Write the data lineage report from the provenance manifest."""
+    paths = data_paths(data_dir)
+    manifest = provenance.load(paths)
+    if verify:
+        problems = provenance.verify(paths)
+        for problem in problems:
+            typer.echo(f"DRIFT {problem}", err=True)
+        if problems:
+            raise typer.Exit(code=1)
+        typer.echo(f"{len(manifest.processed)} partitions match the manifest")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(provenance.render(manifest))
+    typer.echo(f"data version {manifest.data_version}; lineage written to {output}")
+
+
 @app.command("train")
 def train_cmd(
     output: Output = Path("docs/model_eval.md"),
@@ -395,12 +420,22 @@ def train_cmd(
     audit_sample: Annotated[
         int, typer.Option("--audit-sample", help="Held-out fourth downs to replay.")
     ] = 4000,
+    track: Annotated[
+        bool, typer.Option("--track/--no-track", help="Log the run to MLflow.")
+    ] = True,
     data_dir: DataDir = None,
     verbose: Verbose = False,
 ) -> None:
     """Fit win probability, the fourth-down components, and the play-call model."""
     _configure_logging(verbose)
     paths = data_paths(data_dir)
+    problems = provenance.verify(paths)
+    if problems:
+        for problem in problems:
+            typer.echo(f"DRIFT {problem}", err=True)
+        typer.echo("data does not match data/manifest.json; rerun `fourthdown build`", err=True)
+        raise typer.Exit(code=1)
+    manifest = provenance.load(paths)
     paths.models.mkdir(parents=True, exist_ok=True)
     with warehouse.connect(paths) as connection:
         results = training.run(
@@ -411,6 +446,43 @@ def train_cmd(
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(training.report(results))
+    card = ModelCard.build(
+        artifact=paths.models / WP_ARTIFACT,
+        manifest=manifest,
+        params=tracking.training_params(
+            SeasonSplit(
+                train=results.wp_dataset.train.seasons,
+                valid=results.wp_dataset.valid.seasons,
+                test=results.wp_dataset.test.seasons,
+            ),
+            epochs=epochs,
+            audit_sample=audit_sample,
+        ),
+        metrics=training.summary_metrics(results),
+    )
+    card_path = paths.models / MODEL_CARD
+    if track:
+        card = tracking.log_run(
+            card,
+            paths=paths,
+            card_path=card_path,
+            manifest=manifest,
+            history=results.history,
+            artifacts=[
+                paths.models / name
+                for name in (
+                    WP_ARTIFACT,
+                    training.HISTORY_ARTIFACT,
+                    training.PLAYCALL_ARTIFACT,
+                    FOURTH_DOWN_ARTIFACT,
+                )
+            ]
+            + [output],
+        )
+        typer.echo(f"MLflow run {card.mlflow_run_id} at {card.mlflow_tracking_uri}")
+    else:
+        card.save(card_path)
+    typer.echo(f"data version {card.data_version}; model card at {card_path}")
     typer.echo(
         f"win probability log loss {results.win_probability.log_loss:.4f} "
         f"(ECE {results.win_probability.calibration_error:.4f}), "
@@ -508,6 +580,18 @@ def serve_cmd(
             typer.echo(f"unavailable: {name} ({reason})", err=True)
         typer.echo(f"tools: {', '.join(services.readiness.tools)}")
         create_app(provided=services).run(host=host, port=port, threaded=False)
+
+
+@app.command("serve-wp")
+def serve_wp_cmd(
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8080,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Run the standalone win-probability service (what the container runs)."""
+    _configure_logging(verbose)
+    wp_service.create_app(data_paths(data_dir).models).run(host=host, port=port)
 
 
 @app.command("eval-routing")
