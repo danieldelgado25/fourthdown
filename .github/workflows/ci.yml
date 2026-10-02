@@ -89,6 +89,33 @@ jobs:
         run: fourthdown build --seasons 2009-2024
       - name: Scorecard (offline suites, gated by src/fourthdown/evaluation/gates.json)
         run: make scorecard-ci
+      - name: Verify the data against its provenance manifest
+        run: fourthdown lineage --verify --output eval/lineage.md
+      - name: Train a short run, tracked in MLflow, to package
+        run: fourthdown train --epochs 5 --audit-sample 200 --output eval/model_eval.md
+      - name: Build the win-probability image
+        run: make wp-image
+      - name: Smoke-test the container
+        run: |
+          docker run -d --name winprob -p 8080:8080 fourthdown-winprob:latest
+          for _ in $(seq 30); do curl -sf localhost:8080/health && break; sleep 2; done
+          curl -sf localhost:8080/v1/win-probability -H 'content-type: application/json' \
+            -d '{"yardline_100": 45, "down": 2, "ydstogo": 7, "game_seconds_remaining": 900, "score_differential": 3}' \
+            | tee eval/winprob_response.json
+          python - <<'PY'
+          import json
+          body = json.load(open("eval/winprob_response.json"))
+          card = json.load(open("data/models/model_card.json"))
+          assert 0.0 < body["win_probability"] < 1.0, body
+          assert body["model"]["data_version"] == card["data_version"], body
+          assert body["model"]["mlflow_run_id"] == card["mlflow_run_id"], body
+          PY
+          status=$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/v1/win-probability \
+            -H 'content-type: application/json' -d '{"down": 5}')
+          test "$status" = 400
+      - name: Container logs
+        if: failure()
+        run: docker logs winprob || true
       - name: Publish the scorecard to the job summary
         if: always() && hashFiles('eval/scorecard.md') != ''
         run: cat eval/scorecard.md >> "$GITHUB_STEP_SUMMARY"

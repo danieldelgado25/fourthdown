@@ -222,8 +222,7 @@ what it cannot reach — a fresh clone with nothing built still starts and expla
 
 The flip side of holding a DuckDB connection, a pgvector pool, and a torch checkpoint for
 the process lifetime is that the app is single-worker by design. Multi-worker serving
-(gunicorn with preload, or the model behind its own server) belongs with the container
-work in phase 07.
+of the win-probability model is handled by its own container (below).
 
 ## Evaluation in CI (phase 06)
 
@@ -265,6 +264,46 @@ adversarial queries got through: `read_text`, `read_blob`, `sniff_csv`, `sqlite_
 another catalog or schema. The guard now rejects every FROM source that is not a plain
 view name in the warehouse schema.
 
+## Provenance and the win-probability container
+
+**Every table has a recorded origin.** Each pipeline step writes what it produced into
+`data/manifest.json` (`src/fourthdown/data/provenance.py`):
+
+| step | records |
+| --- | --- |
+| `ingest` | per season: source URL, SHA-256, bytes, and the ETag / Last-Modified of the download |
+| `etl` | per partition: rows, SHA-256, the SHA-256 of the raw file it came from, and a hash of `etl.py` + `schema.py` |
+| `warehouse` | per view: the SHA-256 of its SQL and what it reads (`plays` reads the partitions; the other four read `plays`) |
+
+nflverse republishes the current season's file in place, so a season number does not
+identify data; the hash does. `data_version` is a 12-character hash over the processed
+partition hashes and the view SQL. `fourthdown lineage --verify` rehashes every file and
+fails if a raw file changed, a partition was edited, a partition was built from a raw
+file that has since been replaced, or the transform code changed after the ETL ran. The
+human-readable version is [lineage.md](lineage.md).
+
+**Training refuses drifted data and logs every run.** `fourthdown train` runs the same
+verify first and exits if anything has drifted, so a model can't be trained on data
+the manifest doesn't describe. Each run then goes to MLflow (`models/tracking.py`), by
+default a SQLite store at `data/mlflow/mlflow.db`. The run records the data version as
+a tag and a param, the season split, every hyperparameter, the headline metrics, the
+per-epoch train and validation loss, and the artifacts, manifest, and report as
+attachments. `FOURTHDOWN_MLFLOW_URI` points it at a shared server instead.
+
+**The artifact carries its own provenance.** Training writes `data/models/model_card.json`
+next to `winprob.pt`. It holds the artifact's SHA-256, the feature order, the data version,
+the split, the metrics, the commit, and the MLflow run id. The serving container has no
+MLflow and no warehouse, so the card is how it knows what it is serving.
+
+**The container serves one model and proves which one.** `docker/winprob.Dockerfile`
+bakes in the weights and the card and runs `fourthdown.serving.winprob` under gunicorn
+with two preloaded workers. It installs only what inference imports (CPU torch, numpy,
+polars, duckdb, scikit-learn, Flask), pinned, with no LLM, retrieval, or MLflow stack. At
+startup it rehashes the weights and refuses to start if they don't match the card. Every
+response then carries the data version, run id, and artifact hash, and the image labels
+carry the same ids, so a probability can be traced from the response back to the run and
+the source files.
+
 ## Phase status
 
 | phase | scope | status |
@@ -276,4 +315,5 @@ view name in the warehouse schema.
 | 04 | win probability, 4th-down advisor, play-call model | done |
 | 05 | orchestrator, Flask API, React dashboard | done |
 | 06 | evaluation harness in CI | done |
-| 07 | Docker, then Helm on a local Kubernetes cluster | next |
+| 07a | provenance, MLflow tracking, containerized win-probability API | done |
+| 07b | full stack in Docker, then Helm on a local Kubernetes cluster | next |

@@ -39,6 +39,14 @@ class Paths:
     def models(self) -> Path:
         return self.root / "models"
 
+    @property
+    def manifest(self) -> Path:
+        return self.root / "manifest.json"
+
+    @property
+    def mlflow(self) -> Path:
+        return self.root / "mlflow"
+
     def season_raw(self, season: int) -> Path:
         return self.raw / f"play_by_play_{season}.parquet"
 
