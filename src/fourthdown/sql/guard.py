@@ -37,10 +37,32 @@ FORBIDDEN_NODES: tuple[type[exp.Expr], ...] = (
     exp.Command,  # sqlglot's catch-all for statements it does not model (PRAGMA, SET, ...)
 )
 
-# DuckDB table functions that read arbitrary paths or URLs.
+# DuckDB functions that read arbitrary paths or URLs, run nested queries, or expose
+# configuration. Listed by name so the repair loop gets a specific message.
 FORBIDDEN_FUNCTIONS: frozenset[str] = frozenset(
-    {"read_parquet", "read_csv", "read_csv_auto", "read_json", "read_json_auto", "glob"}
+    {
+        "read_parquet",
+        "parquet_scan",
+        "read_csv",
+        "read_csv_auto",
+        "sniff_csv",
+        "read_json",
+        "read_json_auto",
+        "read_json_objects",
+        "read_ndjson",
+        "read_ndjson_auto",
+        "read_text",
+        "read_blob",
+        "sqlite_scan",
+        "query",
+        "query_table",
+        "glob",
+        "getenv",
+        "current_setting",
+    }
 )
+
+DEFAULT_SCHEMA = "main"
 
 
 class UnsafeSQLError(ValueError):
@@ -80,6 +102,25 @@ def _as_query(statement: exp.Expr) -> exp.Query:
     if not isinstance(statement, exp.Query):
         raise UnsafeSQLError("query must be a SELECT")
     return statement
+
+
+def _check_sources(statement: exp.Expr) -> None:
+    """Every FROM/JOIN source must be a plain view name in the warehouse's own schema.
+
+    Table functions (``range(...)``, ``read_text(...)``) have no name to check against the
+    allowed views, so they are rejected outright.
+    """
+    for table in statement.find_all(exp.Table):
+        if not isinstance(table.this, exp.Identifier):
+            raise UnsafeSQLError(
+                f"table functions such as {table.this.sql(dialect=DIALECT)} are not allowed; "
+                "query the views instead"
+            )
+        if table.catalog or (table.db and table.db.lower() != DEFAULT_SCHEMA):
+            raise UnsafeSQLError(
+                f"{table.sql(dialect=DIALECT)} is outside the warehouse; "
+                "query the views by name only"
+            )
 
 
 def _referenced_tables(statement: exp.Expr) -> frozenset[str]:
@@ -136,6 +177,7 @@ def validate(sql: str, *, max_rows: int = DEFAULT_ROW_LIMIT) -> ValidatedSQL:
     """
     statement = _as_query(_statement(sql))
     _check_functions(statement)
+    _check_sources(statement)
     tables = _referenced_tables(statement)
     _check_tables(tables)
     limited, limit = _apply_limit(statement, max_rows)

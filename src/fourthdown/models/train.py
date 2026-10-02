@@ -16,7 +16,7 @@ import numpy as np
 import polars as pl
 
 from fourthdown.models import features, fourth_down, metrics, playcall, winprob
-from fourthdown.models.features import Dataset
+from fourthdown.models.features import DEFAULT_SPLIT, Dataset, SeasonSplit
 from fourthdown.models.metrics import ProbabilityScore
 from fourthdown.models.winprob import GameState
 
@@ -71,16 +71,30 @@ class Results:
     playcall_dataset: Dataset
 
 
-def win_probability_dataset(frame: pl.DataFrame) -> Dataset:
+def win_probability_dataset(frame: pl.DataFrame, split: SeasonSplit = DEFAULT_SPLIT) -> Dataset:
     """Every play with a decided game, from the offense's perspective."""
     usable = frame.filter(pl.col("posteam_won").is_not_null() & pl.col("down").is_not_null())
-    return features.split_by_season(usable, features.WP_FEATURES, "posteam_won")
+    return features.split_by_season(
+        usable,
+        features.WP_FEATURES,
+        "posteam_won",
+        train=split.train,
+        valid=split.valid,
+        test=split.test,
+    )
 
 
-def play_call_dataset(frame: pl.DataFrame) -> Dataset:
+def play_call_dataset(frame: pl.DataFrame, split: SeasonSplit = DEFAULT_SPLIT) -> Dataset:
     """Designed run/pass plays only: kneels and punts are not a coordinator's choice."""
     usable = frame.filter(pl.col("is_designed_play") & pl.col("is_pass_call").is_not_null())
-    return features.split_by_season(usable, features.PLAYCALL_FEATURES, "is_pass_call")
+    return features.split_by_season(
+        usable,
+        features.PLAYCALL_FEATURES,
+        "is_pass_call",
+        train=split.train,
+        valid=split.valid,
+        test=split.test,
+    )
 
 
 def _baseline(frame: pl.DataFrame, column: str, target: str) -> ProbabilityScore | None:
@@ -169,10 +183,11 @@ def run(
     model_dir: Path,
     max_epochs: int = winprob.MAX_EPOCHS,
     audit_sample: int = FOURTH_DOWN_SAMPLE,
+    split: SeasonSplit = DEFAULT_SPLIT,
 ) -> Results:
     """Train win probability, the fourth-down components, and the play-call model."""
     frame = features.load_plays(connection)
-    wp_data = win_probability_dataset(frame)
+    wp_data = win_probability_dataset(frame, split)
     LOGGER.info("win probability splits: %s", wp_data.summary())
     model, history = winprob.train(wp_data, max_epochs=max_epochs)
 
@@ -180,7 +195,7 @@ def run(
     predicted = model.predict(features.feature_matrix(test_frame, wp_data.features))
     wp_score = metrics.score(features.target_vector(test_frame, wp_data.target), predicted)
 
-    call_data = play_call_dataset(frame)
+    call_data = play_call_dataset(frame, split)
     LOGGER.info("play-call splits: %s", call_data.summary())
     call_model = playcall.PlayCallModel.fit(call_data)
     call_score = metrics.score(
@@ -190,7 +205,7 @@ def run(
     neutral = call_data.test.frame.filter(pl.col("is_neutral_script") & (pl.col("down") <= 2))
     tendencies = playcall.predictability(call_model, neutral)
 
-    holdout = wp_data.test.seasons[0] if len(wp_data.test) else 2021
+    holdout = wp_data.test.seasons[0] if len(wp_data.test) else min(split.test)
     advisor = fourth_down.build(connection, model, holdout_season=holdout)
     audit = audit_decisions(advisor, test_frame, sample=audit_sample)
 

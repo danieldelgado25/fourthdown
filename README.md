@@ -159,6 +159,24 @@ rather than erroring on first use.
 The services (DuckDB connection, pgvector pool, torch checkpoint) are opened once and
 held read-only for the life of the process, which makes the app single-worker by design.
 
+## Evaluation
+
+```bash
+make scorecard                               # every suite that can run here -> docs/scorecard.md
+make scorecard-ci                            # what CI runs: offline suites, all required
+```
+
+Every harness reports to one scorecard, which is checked against the bounds in
+[gates.json](src/fourthdown/evaluation/gates.json). Each bound records why it is there,
+and some are ceilings: a win-probability AUC above 0.95 on held-out seasons points to a
+leaked feature, not a better model. On every pull request, CI rebuilds the 2009-2024
+warehouse and runs the SQL guard against 36 adversarial queries. It also scores keyword
+routing, runs every golden reference query, and retrains all three models from scratch.
+The scorecard is published to the job summary. Text-to-SQL and LLM routing run in
+[eval-llm.yml](.github/workflows/eval-llm.yml) weekly, on demand, or on PRs labelled
+`eval-llm`. Retrieval is scored locally against the full index. Design notes are in
+[docs/architecture.md](docs/architecture.md#evaluation-in-ci-phase-06).
+
 ## Layout
 
 ```
@@ -198,6 +216,10 @@ src/fourthdown/
     retrieval_harness.py   hit@1 / recall@k / MRR for hybrid vs dense vs lexical
     golden_routing.json    20 questions labelled with the tool that should answer them
     routing_harness.py     keyword vs LLM routing accuracy and misroutes
+    golden_guard.json      adversarial, legitimate, and row-cap cases for the SQL guard
+    suites.py              each harness as a scorecard suite, skipped when its service is absent
+    scorecard.py           gates, pass/fail verdicts, Markdown and JSON output
+    gates.json             the bound on every gated metric and the reason for it
   agent/
     tools.py          stats / narrative / advisor / tendency behind one Tool protocol
     parse.py          question -> season, team, and fourth-down game state
@@ -217,6 +239,7 @@ docs/
   retrieval_eval.md   generated: retrieval metrics per mode
   model_eval.md       generated: held-out model metrics, calibration, predictability
   routing_eval.md     generated: routing accuracy, keyword vs LLM
+  scorecard.md        generated: every suite against its gates
 ```
 
 ## Data

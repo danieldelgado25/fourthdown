@@ -14,10 +14,11 @@ from fourthdown.agent.router import KeywordRouter, LLMRouter
 from fourthdown.api import create_app
 from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, ingest, warehouse
-from fourthdown.evaluation import harness, retrieval_harness, routing_harness
+from fourthdown.evaluation import harness, retrieval_harness, routing_harness, scorecard, suites
 from fourthdown.llm import LLMError, OllamaClient, default_client
-from fourthdown.models import fourth_down
+from fourthdown.models import fourth_down, winprob
 from fourthdown.models import train as training
+from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
 from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
 from fourthdown.models.winprob import GameState, WinProbabilityModel
 from fourthdown.narrative.render import GRAINS
@@ -292,6 +293,95 @@ def eval_retrieval_cmd(
         f"hybrid hit@1 {report.hit_at_1():.2f}, recall@{k} {report.recall():.2f}, "
         f"MRR {report.mrr():.3f}, written to {output}"
     )
+
+
+SplitSeasons = Annotated[
+    str | None, typer.Option(help="Season spec; give all three splits or none.")
+]
+
+
+def _split(train: str | None, valid: str | None, test: str | None) -> SeasonSplit:
+    given = [spec for spec in (train, valid, test) if spec is not None]
+    if not given:
+        return DEFAULT_SPLIT
+    if len(given) != 3:
+        raise typer.BadParameter(
+            "give --train-seasons, --valid-seasons and --test-seasons together"
+        )
+    assert train is not None and valid is not None and test is not None
+    try:
+        return SeasonSplit(
+            train=tuple(ingest.parse_seasons(train)),
+            valid=tuple(ingest.parse_seasons(valid)),
+            test=tuple(ingest.parse_seasons(test)),
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
+def _names(spec: str) -> list[str]:
+    return [name.strip() for name in spec.split(",") if name.strip()]
+
+
+@app.command("scorecard")
+def scorecard_cmd(
+    suite_names: Annotated[
+        str, typer.Option("--suites", help=f"Comma separated, from: {', '.join(suites.ALL)}.")
+    ] = ",".join(suites.ALL),
+    require: Annotated[
+        str, typer.Option("--require", help="Suites that must run; a skip fails the scorecard.")
+    ] = "",
+    train_seasons: SplitSeasons = None,
+    valid_seasons: SplitSeasons = None,
+    test_seasons: SplitSeasons = None,
+    epochs: Annotated[
+        int, typer.Option("--epochs", help="Cap on win-probability epochs.")
+    ] = winprob.MAX_EPOCHS,
+    audit_sample: Annotated[
+        int, typer.Option("--audit-sample", help="Held-out fourth downs to replay.")
+    ] = 4000,
+    k: TopK = retrieval_harness.DEFAULT_K,
+    model: Model = None,
+    output: Output = Path("docs/scorecard.md"),
+    json_output: Annotated[Path | None, typer.Option("--json", help="Also write JSON.")] = None,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Run the evaluation suites and fail if any gated metric is out of bounds."""
+    _configure_logging(verbose)
+    selected, required = _names(suite_names), _names(require)
+    unknown = sorted(set(selected + required) - set(suites.ALL))
+    if unknown:
+        raise typer.BadParameter(f"unknown suite(s) {', '.join(unknown)}")
+    options = suites.RunOptions(
+        paths=data_paths(data_dir),
+        client=default_client() if model is None else OllamaClient(model),
+        embedder=default_embedder(),
+        split=_split(train_seasons, valid_seasons, test_seasons),
+        epochs=epochs,
+        audit_sample=audit_sample,
+        k=k,
+    )
+    card = scorecard.build(suites.run(selected, options), required=required)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(card.render())
+    if json_output is not None:
+        json_output.parent.mkdir(parents=True, exist_ok=True)
+        json_output.write_text(card.to_json() + "\n")
+    for suite in card.suites:
+        if suite.skipped:
+            typer.echo(f"{suite.name}: skipped ({suite.skipped})", err=True)
+    for verdict in card.failures():
+        typer.echo(
+            f"FAIL {verdict.gate.key} = {verdict.value} (want {verdict.gate.bound()}): "
+            f"{verdict.gate.why}",
+            err=True,
+        )
+    for name in card.missing_required():
+        typer.echo(f"FAIL required suite {name} did not run", err=True)
+    typer.echo(f"scorecard {'passed' if card.passed else 'failed'}; written to {output}")
+    if not card.passed:
+        raise typer.Exit(code=1)
 
 
 @app.command("train")
