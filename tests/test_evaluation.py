@@ -101,3 +101,17 @@ def test_report_renders_a_scoreboard(views_connection, question) -> None:
     rendered = report.render()
     assert "correct result: 1/1" in rendered
     assert "plays-in-2023" in rendered
+
+
+def test_holdout_set_is_well_formed_and_disjoint_from_the_dev_set() -> None:
+    dev = harness.load_questions()
+    holdout = harness.load_questions(holdout=True)
+    assert len(holdout) >= 10
+    assert len({question.id for question in holdout}) == len(holdout)
+    assert not {question.id for question in dev} & {question.id for question in holdout}
+    assert not {question.question for question in dev} & {q.question for q in holdout}
+    for question in holdout:
+        assert question.tags
+        assert question.expect_unanswerable == (question.reference_sql is None)
+        if question.reference_sql is not None:
+            guard.validate(question.reference_sql)

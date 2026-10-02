@@ -37,3 +37,17 @@ def test_card_notes_are_view_specific(views_connection) -> None:
 
 def test_card_stays_within_a_reasonable_prompt_budget(views_connection) -> None:
     assert len(schema_card.build(views_connection)) < 8000
+
+
+def test_card_translates_football_terms_into_filters(views_connection) -> None:
+    card = schema_card.build(views_connection)
+    assert "distance_bucket IN ('long', 'very_long')" in card
+    assert "down = 4 AND is_designed_play" in card
+    assert "BAL Ravens" in card
+
+
+def test_card_warns_that_per_game_views_need_rolling_up(views_connection) -> None:
+    card = schema_card.build(views_connection)
+    assert "HAVING sum(plays) >= N" in card
+    assert "sum(epa_per_play * plays) / sum(plays)" in card
+    assert "drives has no field_zone" in card

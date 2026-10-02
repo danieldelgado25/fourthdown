@@ -175,16 +175,20 @@ def eval_cmd(
     output: Output = Path("docs/text_to_sql_eval.md"),
     model: Model = None,
     data_dir: DataDir = None,
+    holdout: Annotated[
+        bool, typer.Option("--holdout", help="Score the held-out set instead of the dev set.")
+    ] = False,
     verbose: Verbose = False,
 ) -> None:
-    """Run the golden question set and write the execution-accuracy report."""
+    """Run a golden question set and write the execution-accuracy report."""
     _configure_logging(verbose)
     client = default_client() if model is None else OllamaClient(model)
     with warehouse.connect(data_paths(data_dir)) as connection:
         chain = TextToSQL(connection, client)
-        report = harness.evaluate(connection, chain)
+        report = harness.evaluate(connection, chain, harness.load_questions(holdout=holdout))
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(report.render())
+    title = "Text-to-SQL evaluation (held-out set)" if holdout else "Text-to-SQL evaluation"
+    output.write_text(report.render(title))
     typer.echo(
         f"{report.correct}/{report.total} correct, "
         f"{report.executed}/{report.total} runnable, written to {output}"

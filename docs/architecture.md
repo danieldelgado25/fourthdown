@@ -76,6 +76,43 @@ semantic layer exists to handle: historical team aliases (`SD` -> `LAC`), kneels
 have to be excluded, neutral-script versus raw tendency, and one question the data cannot
 answer, which the model is expected to decline.
 
+**Accuracy comes from semantics, not syntax.** The first 7B run produced runnable SQL for
+14 of 15 golden questions but the right answer for only 7. The misses were domain and grain
+mistakes: "third and long" filtered one distance bucket and dropped `down = 3`, a passer's
+season EPA averaged per-game rates and put the play minimum in WHERE instead of HAVING,
+the coldest game paired `min(temp)` with an unrelated `min(game_date)`, and a red-zone
+question asked `drives` for a `field_zone` column that only `plays` has. The fixes target
+those categories rather than the questions:
+
+- the schema card states each aggregate view's grain, a football glossary (third and long,
+  fourth-down attempts, designed runs, red zone, team codes), and rules for query shapes
+  (ORDER BY ... LIMIT 1 for an extreme row, GROUP BY the flag for a comparison);
+- six worked exemplars cover those shapes on different teams, seasons, and metrics, and a
+  test fails if any exemplar duplicates a golden question or reference;
+- repair prompts carry every failed attempt, the columns of each view the query touched,
+  and, when DuckDB reports a missing column, which view owns it or that none does.
+
+Diagnosing the failures also found a warehouse bug: `drives.scored_touchdown` was true
+for pick-sixes and other return touchdowns, so the golden reference itself was counting
+the defence's scores. It now follows the drive result.
+
+**A held-out set keeps the tuning honest.** Prompt changes made while looking at 15
+questions can memorise them. `golden_holdout.json` holds 15 different questions, written
+and scored before any tuning and never used to choose card text or exemplars. The
+scorecard reports both, and the gates hold both.
+
+| set | before | after |
+| --- | --- | --- |
+| development, correct | 7/15 | 14/15 |
+| development, runnable | 14/15 | 15/15 |
+| held-out, correct | 3/15 | 9/15 |
+| held-out, runnable | 13/15 | 14/15 |
+
+The held-out gain is smaller than the development gain, which is the expected shape: part
+of the development improvement is fitting, and the held-out number is the one to quote.
+Its remaining misses are listed in
+[text_to_sql_holdout_eval.md](text_to_sql_holdout_eval.md).
+
 ## Narrative retrieval (phase 03)
 
 ```

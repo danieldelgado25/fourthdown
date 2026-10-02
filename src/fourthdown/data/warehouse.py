@@ -74,7 +74,7 @@ SELECT
     sum(first_down::INT) AS first_downs,
     sum(epa) AS epa,
     avg(epa) AS epa_per_play,
-    max(touchdown::INT) = 1 AS scored_touchdown
+    coalesce(any_value(fixed_drive_result) = 'Touchdown', false) AS scored_touchdown
 FROM plays
 WHERE drive_id IS NOT NULL AND posteam IS NOT NULL
 GROUP BY drive_id

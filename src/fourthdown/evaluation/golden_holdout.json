@@ -1,0 +1,96 @@
+{
+  "description": "Held-out golden questions for text-to-SQL. Written and scored before any prompt tuning, and never used to tune the schema card, exemplars, or repair loop: golden.json is the development set, this file measures whether those changes generalise. Same grading as golden.json.",
+  "questions": [
+    {
+      "id": "bills-neutral-pass-rate",
+      "question": "What was the Buffalo Bills' pass rate in neutral game script in 2021?",
+      "tags": ["aggregate", "game-script"],
+      "reference_sql": "SELECT avg(is_pass_call::INT) AS pass_rate FROM plays WHERE season = 2021 AND posteam = 'BUF' AND is_designed_play AND is_neutral_script"
+    },
+    {
+      "id": "highest-run-rate",
+      "question": "Which team had the highest run rate on designed plays in 2020?",
+      "tags": ["ranking", "rate"],
+      "reference_sql": "SELECT posteam FROM plays WHERE season = 2020 AND is_designed_play GROUP BY posteam ORDER BY avg((NOT is_pass_call)::INT) DESC LIMIT 1"
+    },
+    {
+      "id": "fourth-down-success-rate",
+      "question": "What is the success rate of fourth-down attempts since 2018?",
+      "tags": ["aggregate", "situational"],
+      "reference_sql": "SELECT avg(success::INT) AS success_rate FROM plays WHERE season >= 2018 AND down = 4 AND is_designed_play"
+    },
+    {
+      "id": "backed-up-drives",
+      "question": "How many drives in 2022 started at or inside the offense's own 10-yard line?",
+      "tags": ["drives", "counting", "field-position"],
+      "reference_sql": "SELECT count(*) FROM drives WHERE season = 2022 AND start_yardline_100 >= 90"
+    },
+    {
+      "id": "highest-scoring-game",
+      "question": "Which game had the most combined points in 2023?",
+      "tags": ["games", "extremes"],
+      "reference_sql": "SELECT game_id FROM games WHERE season = 2023 ORDER BY total_points DESC LIMIT 1"
+    },
+    {
+      "id": "receiving-td-leader",
+      "question": "Which receiver caught the most touchdowns in 2022?",
+      "tags": ["players", "ranking"],
+      "reference_sql": "SELECT player_name FROM player_game WHERE season = 2022 AND role = 'receiver' GROUP BY player_name ORDER BY sum(touchdowns) DESC LIMIT 1"
+    },
+    {
+      "id": "rusher-epa-leader",
+      "question": "Which rusher had the best EPA per play in 2023 among those with at least 150 rushing plays?",
+      "tags": ["players", "ranking", "having"],
+      "reference_sql": "SELECT player_name FROM player_game WHERE season = 2023 AND role = 'rusher' GROUP BY player_name HAVING sum(plays) >= 150 ORDER BY sum(epa_per_play * plays) / sum(plays) DESC LIMIT 1"
+    },
+    {
+      "id": "shotgun-vs-under-center",
+      "question": "Compare EPA per play from shotgun versus under center on designed plays in 2024.",
+      "tags": ["comparison", "group-by"],
+      "reference_sql": "SELECT shotgun, avg(epa) AS epa_per_play FROM plays WHERE season = 2024 AND is_designed_play GROUP BY shotgun ORDER BY shotgun"
+    },
+    {
+      "id": "raiders-home-wins",
+      "question": "How many home games did the Oakland Raiders win in 2015?",
+      "tags": ["aliasing", "trap", "games"],
+      "reference_sql": "SELECT count(*) FROM games WHERE season = 2015 AND home_team = 'LV' AND home_margin > 0"
+    },
+    {
+      "id": "titans-first-down-runs",
+      "question": "How many designed runs did the Titans call on first down in 2020?",
+      "tags": ["designed-play", "filtering"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2020 AND posteam = 'TEN' AND down = 1 AND is_designed_play AND NOT is_pass_call"
+    },
+    {
+      "id": "red-zone-epa",
+      "question": "What was the league-wide EPA per play in the red zone in 2023?",
+      "tags": ["aggregate", "field-position"],
+      "reference_sql": "SELECT avg(epa) AS epa_per_play FROM plays WHERE season = 2023 AND field_zone = 'red_zone' AND is_designed_play"
+    },
+    {
+      "id": "fourth-down-conversion-leader",
+      "question": "Which team converted the most fourth downs in 2023?",
+      "tags": ["ranking", "team-game"],
+      "reference_sql": "SELECT team FROM team_game WHERE season = 2023 GROUP BY team ORDER BY sum(fourth_down_conversions) DESC LIMIT 1"
+    },
+    {
+      "id": "punt-share",
+      "question": "What share of drives ended in a punt in 2023?",
+      "tags": ["drives", "rate"],
+      "reference_sql": "SELECT avg((drive_result = 'Punt')::INT) AS punt_share FROM drives WHERE season = 2023"
+    },
+    {
+      "id": "early-vs-late-down-pass-rate",
+      "question": "Compare the pass rate on early downs with later downs in 2023.",
+      "tags": ["comparison", "situational"],
+      "reference_sql": "SELECT is_early_down, avg(is_pass_call::INT) AS pass_rate FROM plays WHERE season = 2023 AND is_designed_play GROUP BY is_early_down ORDER BY is_early_down"
+    },
+    {
+      "id": "unanswerable-attendance",
+      "question": "Which stadium sold the most tickets in 2022?",
+      "tags": ["unanswerable"],
+      "reference_sql": null,
+      "expect_unanswerable": true
+    }
+  ]
+}
