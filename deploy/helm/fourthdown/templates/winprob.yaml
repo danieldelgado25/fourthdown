@@ -1,0 +1,57 @@
+{{- if .Values.winprob.enabled }}
+{{- $name := printf "%s-winprob" (include "fourthdown.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.winprob.service.type }}
+  selector:
+    {{- include "fourthdown.selector" (dict "root" . "component" "winprob") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.winprob.service.port }}
+      targetPort: http
+      {{- with .Values.winprob.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.winprob.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fourthdown.selector" (dict "root" . "component" "winprob") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" . | nindent 8 }}
+        {{- include "fourthdown.selector" (dict "root" . "component" "winprob") | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: winprob
+          image: {{ include "fourthdown.image" .Values.images.winprob }}
+          imagePullPolicy: {{ .Values.images.winprob.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.winprob.resources | nindent 12 }}
+{{- end }}

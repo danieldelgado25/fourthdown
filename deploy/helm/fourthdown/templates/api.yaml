@@ -1,0 +1,105 @@
+{{- $name := printf "%s-api" (include "fourthdown.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.api.service.type }}
+  selector:
+    {{- include "fourthdown.selector" (dict "root" . "component" "api") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.api.service.port }}
+      targetPort: http
+      {{- with .Values.api.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fourthdown.selector" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" . | nindent 8 }}
+        {{- include "fourthdown.selector" (dict "root" . "component" "api") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Services are opened once per worker at startup, so a new build or index restarts it.
+        fourthdown/pipeline: {{ include "fourthdown.pipelineJob" . }}
+        fourthdown/index-seasons: {{ .Values.index.seasons | quote }}
+    spec:
+      {{- include "fourthdown.appSecurity" . | nindent 6 }}
+      initContainers:
+        - name: wait
+          image: {{ include "fourthdown.image" .Values.images.app }}
+          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          command:
+            - fourthdown
+            - wait
+            - --data
+            {{- if include "fourthdown.ollamaUrl" . }}
+            - --ollama-models
+            - {{ printf "%s,%s" .Values.llm.model .Values.llm.embedModel | quote }}
+            {{- end }}
+            {{- if include "fourthdown.indexEnabled" . }}
+            - --min-documents
+            - "1"
+            {{- end }}
+            - --timeout
+            - {{ .Values.api.waitTimeoutSeconds | quote }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "fourthdown.fullname" . }}
+          env:
+            {{- include "fourthdown.appEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      containers:
+        - name: api
+          image: {{ include "fourthdown.image" .Values.images.app }}
+          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "fourthdown.fullname" . }}
+          env:
+            {{- include "fourthdown.appEnv" . | nindent 12 }}
+            - name: WEB_CONCURRENCY
+              value: {{ .Values.api.workers | quote }}
+          ports:
+            - name: http
+              containerPort: 8000
+          startupProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /api/health, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "fourthdown.fullname" . }}-data

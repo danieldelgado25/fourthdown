@@ -1,0 +1,9 @@
+apiVersion: v2
+name: fourthdown
+description: >-
+  FourthDown on Kubernetes -- the API, dashboard, win-probability service, Postgres with
+  pgvector, Ollama, and the Jobs that build the warehouse, train the models, and index
+  the narratives into a shared volume.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

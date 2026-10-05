@@ -124,3 +124,40 @@ jobs:
         with:
           name: scorecard
           path: eval/
+
+  k8s:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Lint the chart
+        run: make helm-lint
+      - name: Build the app and dashboard images
+        run: make app-image web-image
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: fourthdown
+          config: deploy/kind/cluster.yaml
+      - name: Load the images into kind
+        run: kind load docker-image --name fourthdown fourthdown-app:latest fourthdown-web:latest
+      - name: Install the chart (pipeline Job, Postgres, API, dashboard)
+        run: >-
+          helm install fourthdown deploy/helm/fourthdown
+          -f deploy/helm/fourthdown/values-kind.yaml -f deploy/helm/fourthdown/values-ci.yaml
+          --wait --timeout 25m
+      - name: helm test (health and advice through the dashboard's /api proxy)
+        run: helm test fourthdown --logs
+      - name: Reach the dashboard through the kind port mapping
+        run: |
+          curl -sf localhost:8088/ | grep -q '<div id="root">'
+          curl -sf localhost:8088/api/health | tee health.json
+          python3 -c "import json; h = json.load(open('health.json')); assert h['warehouse'] and h['models'], h"
+      - name: Cluster state
+        if: failure()
+        run: |
+          kubectl get all,pvc,jobs -o wide
+          kubectl describe pods
+          for pod in $(kubectl get pods -o name); do kubectl logs "$pod" --all-containers --tail=100 || true; done

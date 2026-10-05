@@ -1,0 +1,14 @@
+FourthDown is starting. The pipeline Job downloads and warehouses {{ .Values.pipeline.seasons }}
+and trains the models; the API waits for it{{ if include "fourthdown.indexEnabled" . }} and for the narrative index{{ end }}.
+
+  kubectl get jobs,pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl logs -f job/{{ include "fourthdown.pipelineJob" . }}
+
+Dashboard:
+{{- if eq .Values.web.service.type "NodePort" }}
+  NodePort {{ .Values.web.service.nodePort }} (http://localhost:8088 with deploy/kind/cluster.yaml)
+{{- else }}
+  kubectl port-forward svc/{{ include "fourthdown.fullname" . }}-web 8088:{{ .Values.web.service.port }}
+{{- end }}
+
+Once the API is ready:  helm test {{ .Release.Name }}

@@ -1,0 +1,34 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "fourthdown.pipelineJob" . }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.pipeline.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.selector" (dict "root" . "component" "pipeline") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- include "fourthdown.appSecurity" . | nindent 6 }}
+      containers:
+        - name: pipeline
+          image: {{ include "fourthdown.image" .Values.images.app }}
+          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          command: ["fourthdown-pipeline"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "fourthdown.fullname" . }}
+          env:
+            {{- include "fourthdown.appEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.pipeline.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "fourthdown.fullname" . }}-data

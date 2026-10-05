@@ -1,0 +1,12 @@
+# Single-node local cluster. The dashboard and the win-probability service are NodePorts
+# (see values-kind.yaml) published on the host at :8088 and :8089.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: fourthdown
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8088
+      - containerPort: 30081
+        hostPort: 8089

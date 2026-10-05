@@ -1,0 +1,55 @@
+{{- if include "fourthdown.indexEnabled" . }}
+{{- $inputs := printf "%s|%s|%s" .Values.index.seasons .Values.llm.embedModel (include "fourthdown.pipelineJob" .) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-index-%s" (include "fourthdown.fullname" .) ($inputs | sha256sum | trunc 8) }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.selector" (dict "root" . "component" "index") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      {{- include "fourthdown.appSecurity" . | nindent 6 }}
+      initContainers:
+        - name: wait
+          image: {{ include "fourthdown.image" .Values.images.app }}
+          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          command: ["fourthdown", "wait", "--data", "--postgres",
+                    "--ollama-models", {{ .Values.llm.embedModel | quote }},
+                    "--timeout", {{ .Values.api.waitTimeoutSeconds | quote }}]
+          envFrom:
+            - configMapRef:
+                name: {{ include "fourthdown.fullname" . }}
+          env:
+            {{- include "fourthdown.appEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      containers:
+        - name: index
+          image: {{ include "fourthdown.image" .Values.images.app }}
+          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          command: ["fourthdown", "index", "--seasons", {{ .Values.index.seasons | quote }},
+                    "--playoff-drives"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "fourthdown.fullname" . }}
+          env:
+            {{- include "fourthdown.appEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.index.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "fourthdown.fullname" . }}-data
+{{- end }}

@@ -210,6 +210,45 @@ The scorecard is published to the job summary. Text-to-SQL and LLM routing run i
 `eval-llm`. Retrieval is scored locally against the full index. Design notes are in
 [docs/architecture.md](docs/architecture.md#evaluation-in-ci-phase-06).
 
+## Running it in containers
+
+Everything below builds its data inside a volume. Nothing on the host is mounted, and the
+pipeline runs the same provenance checks there as it does locally.
+
+**Docker Compose** brings up the whole stack: Postgres, Ollama, a model pull, the
+pipeline, the narrative index, the API, the dashboard, and the win-probability service.
+
+```bash
+make images                       # fourthdown-app, fourthdown-web, fourthdown-winprob
+make stack-up                     # dashboard on http://localhost:8088, API on :8000
+docker compose logs -f pipeline   # first run: download, build, and train 2009-2024
+```
+
+`FOURTHDOWN_OLLAMA_URL=http://host.docker.internal:11434` uses an Ollama already running
+on the host instead of the bundled one. `FOURTHDOWN_SEASONS`, `FOURTHDOWN_TRAIN_ARGS`,
+and `FOURTHDOWN_LLM_MODEL` size the build. Plain `docker compose up -d` still starts just
+Postgres for local development.
+
+**Kubernetes (kind + Helm).** The chart in `deploy/helm/fourthdown` runs the same pieces:
+Postgres and Ollama as StatefulSets, the pipeline, model-pull, and index steps as Jobs,
+and the API, dashboard, and model service as Deployments. Each has probes and resource
+limits sized for a laptop.
+
+```bash
+make kind-up                      # one-node cluster; host 8088 -> dashboard, 8089 -> winprob
+make images kind-load             # kind cannot pull local images, so load them
+make k8s-deploy                   # helm upgrade --install with values-kind.yaml
+kubectl get jobs,pods -w          # API pods wait in init until data, models, and index exist
+make k8s-test                     # helm test: health, advice, and a win probability
+```
+
+`HELM_ARGS="--set pipeline.seasons=2022-2024 --set llm.model=qwen2.5-coder:1.5b"` makes a
+quick, small cluster. `--set ollama.enabled=false --set ollama.externalUrl=http://...`
+uses an existing Ollama, and `--set postgres.existingSecret=<name>` takes the database
+password from your own Secret. With Ollama disabled and no URL, the chart skips the index
+and the API falls back to keyword routing. Design notes are in
+[docs/architecture.md](docs/architecture.md#containers-and-kubernetes-phase-07b).
+
 ## Layout
 
 ```
@@ -245,7 +284,9 @@ src/fourthdown/
     train.py          fits all three, writes artifacts and docs/model_eval.md
     card.py           model card: artifact hash, data version, split, metrics, run id
     tracking.py       MLflow run logging (SQLite store under data/mlflow by default)
-  serving/winprob.py  standalone win-probability API, the container's entrypoint
+  serving/
+    winprob.py        standalone win-probability API, the container's entrypoint
+    wait.py           `fourthdown wait`: block until data, Ollama models, or the index exist
   evaluation/
     golden.json       15 questions with reference SQL, including traps and one refusal
     harness.py        result-level scoring and the Markdown report
@@ -280,6 +321,13 @@ docs/
   lineage.md          generated: data version, per-table sources and hashes
 docker/
   winprob.Dockerfile  CPU-only image with the trained model and its card baked in
+  app.Dockerfile      the package and CLI under gunicorn: API, pipeline, and index jobs
+  web.Dockerfile      the dashboard build behind nginx, proxying /api to the API
+  pipeline.sh         build + train into the data volume, skipped when already current
+  constraints.txt     pinned runtime versions for the app image (`make constraints`)
+deploy/
+  helm/fourthdown/    the chart; values-kind.yaml for a local cluster, values-ci.yaml for CI
+  kind/cluster.yaml   one node, host ports 8088 (dashboard) and 8089 (winprob)
 ```
 
 ## Data
