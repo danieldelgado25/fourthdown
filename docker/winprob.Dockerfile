@@ -32,8 +32,8 @@ LABEL org.opencontainers.image.title="fourthdown-winprob" \
       fourthdown.mlflow_run_id="${MLFLOW_RUN_ID}"
 
 ENV FOURTHDOWN_MODEL_DIR=/models
-RUN useradd --system --create-home app
-USER app
+RUN useradd --system --uid 10001 --create-home app
+USER 10001
 
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \

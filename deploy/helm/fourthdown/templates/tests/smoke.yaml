@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "fourthdown.fullname" . }}-smoke
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+  containers:
+    - name: smoke
+      image: {{ include "fourthdown.image" .Values.images.app }}
+      imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+      env:
+        - name: WEB
+          value: {{ printf "http://%s-web:%v" (include "fourthdown.fullname" .) .Values.web.service.port }}
+        - name: WINPROB
+          value: {{ if .Values.winprob.enabled }}{{ printf "http://%s-winprob:%v" (include "fourthdown.fullname" .) .Values.winprob.service.port }}{{ end }}
+      command: ["python", "-c"]
+      args:
+        - |
+          import json, os, urllib.request
+
+          def get(url, body=None):
+              data = None if body is None else json.dumps(body).encode()
+              request = urllib.request.Request(url, data, {"content-type": "application/json"})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+
+          web = os.environ["WEB"]
+          health = get(f"{web}/api/health")
+          print("health", health)
+          assert health["warehouse"] and health["models"], health
+          advice = get(f"{web}/api/advise", {"yardline_100": 38, "ydstogo": 2,
+                                             "game_seconds_remaining": 240, "score_differential": -3})
+          print("advice", advice.get("best"), advice.get("edge"))
+          assert advice.get("best") and advice.get("options"), advice
+          if os.environ.get("WINPROB"):
+              body = {"yardline_100": 45, "down": 2, "ydstogo": 7,
+                      "game_seconds_remaining": 900, "score_differential": 3}
+              wp = get(f"{os.environ['WINPROB']}/v1/win-probability", body)
+              print("win probability", wp["win_probability"])
+              assert 0.0 < wp["win_probability"] < 1.0, wp

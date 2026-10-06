@@ -1,0 +1,14 @@
+# The CI kind deployment: three seasons and a five-epoch training run so the pipeline Job
+# finishes in minutes, no Ollama (keyword routing, no index), and no win-probability
+# image, which the eval job already builds and smoke-tests.
+pipeline:
+  seasons: "2022-2024"
+  trainArgs: "--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024 --epochs 5 --audit-sample 200"
+ollama:
+  enabled: false
+winprob:
+  enabled: false
+data:
+  storage: 2Gi
+postgres:
+  storage: 1Gi

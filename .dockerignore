@@ -3,6 +3,12 @@
 !README.md
 !src/
 !docker/winprob-requirements.txt
+!docker/constraints.txt
+!docker/pipeline.sh
+!docker/nginx.conf.template
 !data/models/winprob.pt
 !data/models/model_card.json
+!web/
+web/node_modules
+web/dist
 **/__pycache__

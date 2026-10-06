@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "fourthdown.fullname" . }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+data:
+  FOURTHDOWN_DATA_DIR: /data
+  OLLAMA_HOST: {{ include "fourthdown.ollamaUrl" . | quote }}
+  FOURTHDOWN_LLM_MODEL: {{ .Values.llm.model | quote }}
+  FOURTHDOWN_EMBED_MODEL: {{ .Values.llm.embedModel | quote }}
+  FOURTHDOWN_SEASONS: {{ .Values.pipeline.seasons | quote }}
+  FOURTHDOWN_TRAIN_ARGS: {{ .Values.pipeline.trainArgs | quote }}

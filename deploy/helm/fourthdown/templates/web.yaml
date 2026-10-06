@@ -1,0 +1,54 @@
+{{- $name := printf "%s-web" (include "fourthdown.fullname" .) -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.web.service.type }}
+  selector:
+    {{- include "fourthdown.selector" (dict "root" . "component" "web") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.web.service.port }}
+      targetPort: http
+      {{- with .Values.web.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fourthdown.selector" (dict "root" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" . | nindent 8 }}
+        {{- include "fourthdown.selector" (dict "root" . "component" "web") | nindent 8 }}
+    spec:
+      containers:
+        - name: web
+          image: {{ include "fourthdown.image" .Values.images.web }}
+          imagePullPolicy: {{ .Values.images.web.pullPolicy }}
+          env:
+            - name: FOURTHDOWN_API_UPSTREAM
+              value: {{ printf "http://%s-api:%v" (include "fourthdown.fullname" .) .Values.api.service.port | quote }}
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}

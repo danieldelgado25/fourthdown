@@ -1,6 +1,27 @@
+# `docker compose up -d` starts Postgres alone, for running the app from the host.
+# `docker compose --profile stack up -d` runs everything in containers: Ollama (and its
+# model pulls), the data pipeline, the narrative index, the API, and the dashboard.
+# One-shot services gate the long-running ones through service_completed_successfully.
+
+x-app: &app
+  image: ${FOURTHDOWN_APP_IMAGE:-fourthdown-app:latest}
+  build:
+    context: .
+    dockerfile: docker/app.Dockerfile
+    args:
+      BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
+  environment: &app-env
+    FOURTHDOWN_DATA_DIR: /data
+    FOURTHDOWN_PG_DSN: postgresql://fourthdown:fourthdown@postgres:5432/fourthdown
+    OLLAMA_HOST: ${FOURTHDOWN_OLLAMA_URL:-http://ollama:11434}
+    FOURTHDOWN_LLM_MODEL: ${FOURTHDOWN_LLM_MODEL:-qwen2.5-coder:7b}
+    FOURTHDOWN_EMBED_MODEL: ${FOURTHDOWN_EMBED_MODEL:-nomic-embed-text}
+  volumes:
+    - appdata:/data
+
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}
     environment:
       POSTGRES_USER: fourthdown
       POSTGRES_PASSWORD: fourthdown
@@ -15,14 +36,101 @@ services:
       timeout: 5s
       retries: 10
 
+  ollama:
+    profiles: ["stack"]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.35.1}
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  ollama-pull:
+    profiles: ["stack"]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.35.1}
+    environment:
+      OLLAMA_HOST: ${FOURTHDOWN_OLLAMA_URL:-http://ollama:11434}
+      LLM_MODEL: ${FOURTHDOWN_LLM_MODEL:-qwen2.5-coder:7b}
+      EMBED_MODEL: ${FOURTHDOWN_EMBED_MODEL:-nomic-embed-text}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - ollama pull "$${LLM_MODEL}" && ollama pull "$${EMBED_MODEL}"
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  pipeline:
+    <<: *app
+    profiles: ["stack"]
+    environment:
+      <<: *app-env
+      FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-2024}
+      FOURTHDOWN_TRAIN_ARGS: ${FOURTHDOWN_TRAIN_ARGS:-}
+    command: ["fourthdown-pipeline"]
+    restart: "no"
+
+  index:
+    <<: *app
+    profiles: ["stack"]
+    command:
+      - /bin/sh
+      - -c
+      - >-
+        fourthdown wait --min-documents 1 --timeout 0 ||
+        fourthdown index --seasons "$${FOURTHDOWN_INDEX_SEASONS}" --playoff-drives
+    environment:
+      <<: *app-env
+      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2024}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pipeline:
+        condition: service_completed_successfully
+      ollama-pull:
+        condition: service_completed_successfully
+    restart: "no"
+
+  api:
+    <<: *app
+    profiles: ["stack"]
+    ports:
+      - "8000:8000"
+    depends_on:
+      index:
+        condition: service_completed_successfully
+
+  web:
+    profiles: ["stack"]
+    image: ${FOURTHDOWN_WEB_IMAGE:-fourthdown-web:latest}
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    environment:
+      FOURTHDOWN_API_UPSTREAM: http://api:8000
+    ports:
+      - "8088:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
   winprob:
-    profiles: ["winprob"]
+    profiles: ["winprob", "stack"]
     build:
       context: .
       dockerfile: docker/winprob.Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
     image: fourthdown-winprob:latest
     ports:
       - "8080:8080"
 
 volumes:
   pgdata:
+  appdata:
+  ollama:

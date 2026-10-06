@@ -1,10 +1,10 @@
 """The HTTP surface: an application factory over one long-lived `Services`.
 
 The services are opened once and held for the life of the process, because the DuckDB
-connection, the pgvector pool, and a 400 MB torch checkpoint are all expensive to open
-and all read-only afterwards. That makes the app single-worker by design; the dev server
-and `flask run` are both single-process, and scaling past that is a phase-06 problem
-(gunicorn with preload, or a model server behind the API).
+connection, the pgvector session, and the trained models are expensive to open and
+read-only afterwards. Under gunicorn (docker/app.Dockerfile) each worker calls the
+factory and opens its own; DuckDB allows concurrent read-only connections across
+processes.
 
 Every response is JSON with a stable shape, and every answer carries the route that
 produced it -- the dashboard shows which tool ran, and that is a feature, not debug

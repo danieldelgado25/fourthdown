@@ -26,6 +26,7 @@ from fourthdown.narrative.render import GRAINS
 from fourthdown.rag import schema_card
 from fourthdown.rag.text_to_sql import TextToSQL
 from fourthdown.retrieval import DocumentStore, Retriever, default_embedder, index, recall
+from fourthdown.serving import wait as readiness
 from fourthdown.serving import winprob as wp_service
 
 app = typer.Typer(help="FourthDown data pipeline", no_args_is_help=True)
@@ -423,11 +424,15 @@ def train_cmd(
     track: Annotated[
         bool, typer.Option("--track/--no-track", help="Log the run to MLflow.")
     ] = True,
+    train_seasons: SplitSeasons = None,
+    valid_seasons: SplitSeasons = None,
+    test_seasons: SplitSeasons = None,
     data_dir: DataDir = None,
     verbose: Verbose = False,
 ) -> None:
     """Fit win probability, the fourth-down components, and the play-call model."""
     _configure_logging(verbose)
+    split = _split(train_seasons, valid_seasons, test_seasons)
     paths = data_paths(data_dir)
     problems = provenance.verify(paths)
     if problems:
@@ -443,6 +448,7 @@ def train_cmd(
             model_dir=paths.models,
             max_epochs=epochs,
             audit_sample=audit_sample,
+            split=split,
         )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(training.report(results))
@@ -592,6 +598,44 @@ def serve_wp_cmd(
     """Run the standalone win-probability service (what the container runs)."""
     _configure_logging(verbose)
     wp_service.create_app(data_paths(data_dir).models).run(host=host, port=port)
+
+
+@app.command("wait")
+def wait_cmd(
+    data: Annotated[
+        bool, typer.Option("--data", help="The warehouse is built and the models trained.")
+    ] = False,
+    ollama_models: Annotated[
+        str, typer.Option("--ollama-models", help="Comma separated models Ollama must have.")
+    ] = "",
+    postgres: Annotated[
+        bool, typer.Option("--postgres", help="Postgres accepts connections.")
+    ] = False,
+    min_documents: Annotated[
+        int, typer.Option("--min-documents", help="The narrative index holds at least this many.")
+    ] = 0,
+    timeout: Annotated[float, typer.Option("--timeout", help="Seconds before giving up.")] = 1800.0,
+    interval: Annotated[float, typer.Option("--interval", help="Seconds between polls.")] = 5.0,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Block until dependencies are ready; what Kubernetes init containers run."""
+    _configure_logging(verbose)
+    checks: dict[str, readiness.Check] = {}
+    if data:
+        checks["data"] = readiness.data_check(data_paths(data_dir))
+    for model in _names(ollama_models):
+        checks[f"ollama:{model}"] = readiness.ollama_check(model)
+    if postgres or min_documents > 0:
+        checks["postgres"] = readiness.postgres_check(min_documents=min_documents)
+    if not checks:
+        raise typer.BadParameter("nothing to wait for; pass at least one check")
+    pending = readiness.wait_for(checks, timeout=timeout, interval=interval)
+    for name, reason in pending.items():
+        typer.echo(f"not ready: {name} ({reason})", err=True)
+    if pending:
+        raise typer.Exit(code=1)
+    typer.echo(f"ready: {', '.join(checks)}")
 
 
 @app.command("eval-routing")

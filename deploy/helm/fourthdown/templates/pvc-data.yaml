@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "fourthdown.fullname" . }}-data
+  labels:
+    {{- include "fourthdown.labels" . | nindent 4 }}
+  annotations:
+    # Rebuilding the warehouse and retraining take minutes; keep them across uninstalls.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ .Values.data.accessMode }}]
+  {{- with .Values.data.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.data.storage }}

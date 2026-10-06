@@ -220,9 +220,9 @@ no narrative tool; no artifacts means no advisor; no Ollama means keyword routin
 SQL authoring. `/api/health` reports the state and the reason, and the dashboard disables
 what it cannot reach — a fresh clone with nothing built still starts and explains itself.
 
-The flip side of holding a DuckDB connection, a pgvector pool, and a torch checkpoint for
-the process lifetime is that the app is single-worker by design. Multi-worker serving
-of the win-probability model is handled by its own container (below).
+Services are held for the process lifetime, so in a container each gunicorn worker opens
+its own: DuckDB allows any number of read-only connections across processes, and the
+models are a few megabytes. The win-probability model also has its own container (below).
 
 ## Evaluation in CI (phase 06)
 
@@ -304,6 +304,47 @@ response then carries the data version, run id, and artifact hash, and the image
 carry the same ids, so a probability can be traced from the response back to the run and
 the source files.
 
+## Containers and Kubernetes (phase 07b)
+
+Three images, none of which hold data (`docker/`):
+
+| image | contents | runs as |
+| --- | --- | --- |
+| `fourthdown-app` | the package, CPU torch, gunicorn, pinned by `docker/constraints.txt` | the API, the pipeline Job, the index Job, `fourthdown wait` |
+| `fourthdown-web` | the Vite build behind nginx, which proxies `/api` to the API | the dashboard |
+| `fourthdown-winprob` | one trained model and its card (above) | the standalone model service |
+
+**Data is built where it is served.** The DuckDB views store the absolute path of the
+Parquet partitions, so a warehouse built on a laptop cannot simply be copied into a
+volume. Instead `docker/pipeline.sh` runs `fourthdown build` and `fourthdown train`
+against the volume mounted at `/data`, and skips both when the volume already holds a
+build of the same configuration that passes `fourthdown lineage --verify`. The provenance
+checks therefore run inside the cluster too.
+
+**Ordering is explicit.** Compose gates services on `service_completed_successfully`.
+Kubernetes has no equivalent between a Job and a Deployment, so pods run
+`fourthdown wait` as an init container. It polls for the warehouse and the model card,
+for the Ollama models, and for a non-empty narrative index, and on timeout it reports
+which check failed. The API needs this because it opens its services once at startup: a
+pod that started before the index was built would never pick up the narrative tool.
+
+**Jobs are named by their inputs.** A Job's spec is immutable, so the pipeline, index,
+and model-pull Jobs carry a hash of their inputs: seasons, training flags, and image for
+the pipeline; seasons, embedding model, and pipeline for the index. Changing an input
+creates a new Job, and an unchanged upgrade is a no-op. The API pod template is annotated
+with the pipeline Job's name, so a rebuild rolls the API.
+
+**Sized for a laptop.** Requests total under one CPU, so the chart schedules on a 2-CPU
+kind node beside the control plane, and limits leave room for the 7B model. The data
+volume is ReadWriteOnce, which is enough when every pod runs on one node; a multi-node
+cluster needs ReadWriteMany. While the API holds read-only DuckDB connections, a pipeline
+Job cannot rewrite the warehouse, so a rebuild with different seasons needs the API scaled
+to zero first.
+
+CI installs the chart on kind with three seasons, no Ollama, and no model image
+(`values-ci.yaml`). It then runs `helm test`, which checks health and fourth-down advice
+through the dashboard's proxy, and reaches the dashboard through the kind port mapping.
+
 ## Phase status
 
 | phase | scope | status |
@@ -316,4 +357,4 @@ the source files.
 | 05 | orchestrator, Flask API, React dashboard | done |
 | 06 | evaluation harness in CI | done |
 | 07a | provenance, MLflow tracking, containerized win-probability API | done |
-| 07b | full stack in Docker, then Helm on a local Kubernetes cluster | next |
+| 07b | full stack in Docker Compose, Helm chart on a local kind cluster | done |

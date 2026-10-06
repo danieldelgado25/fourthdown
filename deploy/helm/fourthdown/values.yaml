@@ -1,0 +1,112 @@
+# Defaults size the release for a laptop-class local cluster (kind on 2 CPUs / 8 GB).
+# values-kind.yaml layers the kind-specific bits (NodePorts, preloaded images) on top.
+
+images:
+  app:
+    repository: fourthdown-app
+    tag: latest
+    pullPolicy: IfNotPresent
+  web:
+    repository: fourthdown-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  winprob:
+    repository: fourthdown-winprob
+    tag: latest
+    pullPolicy: IfNotPresent
+  postgres:
+    repository: pgvector/pgvector
+    tag: pg16
+    pullPolicy: IfNotPresent
+  ollama:
+    repository: ollama/ollama
+    tag: 0.35.1
+    pullPolicy: IfNotPresent
+
+# Warehouse, models, MLflow store, and reports: one volume written by the pipeline Job
+# and read by the API and index Job. ReadWriteOnce is enough on a single-node cluster;
+# a multi-node cluster needs ReadWriteMany.
+data:
+  storage: 10Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+pipeline:
+  # Seasons to download and warehouse. Training uses the documented split unless
+  # trainArgs overrides it (e.g. "--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024").
+  seasons: "2009-2024"
+  trainArgs: ""
+  backoffLimit: 2
+  resources:
+    requests: {cpu: 200m, memory: 1Gi}
+    limits: {cpu: "2", memory: 4Gi}
+
+llm:
+  model: qwen2.5-coder:7b
+  embedModel: nomic-embed-text
+
+ollama:
+  # In-cluster Ollama. Set enabled=false and externalUrl to use one outside the cluster;
+  # with neither, the API runs without the LLM (keyword routing, no text-to-SQL).
+  enabled: true
+  externalUrl: ""
+  storage: 15Gi
+  storageClass: ""
+  resources:
+    requests: {cpu: 200m, memory: 1Gi}
+    limits: {cpu: "2", memory: 6Gi}
+
+postgres:
+  user: fourthdown
+  database: fourthdown
+  # Local-cluster default. Point existingSecret at a Secret with a `password` key instead.
+  password: fourthdown
+  existingSecret: ""
+  storage: 5Gi
+  storageClass: ""
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+index:
+  # Embeds game and postseason-drive narratives; needs Ollama. The API waits for it.
+  enabled: true
+  seasons: "2024"
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "1", memory: 2Gi}
+
+api:
+  replicas: 1
+  # Gunicorn workers per pod; each opens its own read-only DuckDB connection.
+  workers: 2
+  waitTimeoutSeconds: 3600
+  service:
+    type: ClusterIP
+    port: 8000
+    nodePort: null
+  resources:
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {cpu: "1", memory: 2Gi}
+
+web:
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 80
+    nodePort: null
+  resources:
+    requests: {cpu: 10m, memory: 32Mi}
+    limits: {cpu: 250m, memory: 128Mi}
+
+winprob:
+  # The provenance-checked model image (make wp-image); one image is one trained model.
+  enabled: true
+  replicas: 2
+  service:
+    type: ClusterIP
+    port: 8080
+    nodePort: null
+  resources:
+    requests: {cpu: 50m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}

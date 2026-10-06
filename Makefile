@@ -3,13 +3,23 @@ SEASONS ?= 2009-2024
 PORT ?= 8000
 WP_PORT ?= 8080
 WP_IMAGE ?= fourthdown-winprob
+APP_IMAGE ?= fourthdown-app
+WEB_IMAGE ?= fourthdown-web
 BASE_IMAGE ?= python:3.11-slim
+NODE_IMAGE ?= node:20-alpine
+NGINX_IMAGE ?= nginx:1.27-alpine
+
+KIND_CLUSTER ?= fourthdown
+RELEASE ?= fourthdown
+CHART := deploy/helm/fourthdown
+HELM_ARGS ?=
 
 CI_SUITES ?= guard,routing_keyword,references,models
 
 .PHONY: install format lint typecheck test ingest etl warehouse build audit index train \
 	eval-routing scorecard scorecard-ci serve lineage verify-data mlflow-ui wp-image wp-run \
-	web-install web web-test clean
+	app-image web-image images constraints stack-up stack-down helm-lint kind-up kind-load \
+	k8s-deploy k8s-test kind-down web-install web web-test clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -66,6 +76,49 @@ wp-image:
 
 wp-run:
 	docker run --rm -p $(WP_PORT):8080 $(WP_IMAGE):latest
+
+# The API/pipeline image and the dashboard image; neither holds data.
+app-image:
+	docker build -f docker/app.Dockerfile --build-arg BASE_IMAGE=$(BASE_IMAGE) \
+		--build-arg GIT_COMMIT=$(shell git rev-parse HEAD) -t $(APP_IMAGE):latest .
+
+web-image:
+	docker build -f docker/web.Dockerfile --build-arg NODE_IMAGE=$(NODE_IMAGE) \
+		--build-arg NGINX_IMAGE=$(NGINX_IMAGE) -t $(WEB_IMAGE):latest .
+
+images: app-image web-image wp-image
+
+# Re-pin docker/constraints.txt to the current environment's runtime packages.
+constraints:
+	{ echo "# Runtime pins for docker/app.Dockerfile: the versions the test suite ran against."; \
+	  echo "# torch is installed separately from the CPU wheel index; regenerate with \`make constraints\`."; \
+	  pip freeze --exclude-editable | grep -Eiv '^(fourthdown|torch|pytest|ruff|mypy|mypy[-_]extensions|types-|pluggy|iniconfig|pathspec|librt|ast[-_]serialize)\b'; \
+	} > docker/constraints.txt
+
+stack-up:
+	docker compose --profile stack up -d
+
+stack-down:
+	docker compose --profile stack down
+
+helm-lint:
+	helm lint $(CHART)
+	helm lint $(CHART) -f $(CHART)/values-kind.yaml --set ollama.enabled=false
+
+kind-up:
+	kind create cluster --config deploy/kind/cluster.yaml
+
+kind-load:
+	kind load docker-image --name $(KIND_CLUSTER) $(APP_IMAGE):latest $(WEB_IMAGE):latest $(WP_IMAGE):latest
+
+k8s-deploy:
+	helm upgrade --install $(RELEASE) $(CHART) -f $(CHART)/values-kind.yaml $(HELM_ARGS)
+
+k8s-test:
+	helm test $(RELEASE) --logs
+
+kind-down:
+	kind delete cluster --name $(KIND_CLUSTER)
 
 index:
 	docker compose up -d

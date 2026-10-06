@@ -1,0 +1,13 @@
+# kind: images built locally and loaded with `kind load docker-image`, and the dashboard
+# and win-probability service on the NodePorts deploy/kind/cluster.yaml maps to the host.
+images:
+  app: {pullPolicy: Never}
+  web: {pullPolicy: Never}
+  winprob: {pullPolicy: Never}
+
+web:
+  service: {type: NodePort, nodePort: 30080}
+
+winprob:
+  replicas: 1
+  service: {type: NodePort, nodePort: 30081}
