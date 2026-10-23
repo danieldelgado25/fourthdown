@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import threading
 import time
 from collections.abc import Callable
@@ -223,4 +224,14 @@ def serve(app: Flask, *, host: str | None, port: int | None, default_port: int) 
     resolved_port = port or int(os.environ.get("FOURTHDOWN_PORT", default_port))
     LOGGER.info("serving %s on %s:%d", app.name, resolved_host, resolved_port)
     threads = int(os.environ.get("FOURTHDOWN_THREADS", DEFAULT_THREADS))
+    # As a container's PID 1, Python ignores SIGTERM unless it handles it, so `docker stop`
+    # and Kubernetes would wait out the grace period and SIGKILL. Exit cleanly instead;
+    # callers' `finally` blocks then close the service's resources.
+    signal.signal(signal.SIGTERM, _exit_on_sigterm)
     waitress.serve(app, host=resolved_host, port=resolved_port, threads=threads)
+
+
+def _exit_on_sigterm(signum: int, frame: object) -> None:
+    """Turn SIGTERM into a normal interpreter exit (see `serve`)."""
+    LOGGER.info("SIGTERM received; shutting down")
+    raise SystemExit(0)
