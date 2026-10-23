@@ -1,0 +1,88 @@
+{{- /*
+In-cluster Ollama, plus a Job that pulls the chat and embedding models into its volume.
+The services start before the pull finishes and heal when it does.
+*/}}
+{{- if .Values.ollama.enabled }}
+{{- $name := include "fourthdown.name" . }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}-ollama
+  labels:
+    {{- include "fourthdown.labels" (dict "root" . "component" "ollama") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.ollama.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-ollama
+  labels:
+    {{- include "fourthdown.labels" (dict "root" . "component" "ollama") | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "fourthdown.labels" (dict "root" . "component" "ollama") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" (dict "root" . "component" "ollama") | nindent 8 }}
+    spec:
+      containers:
+        - name: ollama
+          image: {{ .Values.ollama.image }}
+          ports:
+            - containerPort: 11434
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: 11434
+          volumeMounts:
+            - name: models
+              mountPath: /root/.ollama
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ $name }}-ollama
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-ollama
+  labels:
+    {{- include "fourthdown.labels" (dict "root" . "component" "ollama") | nindent 4 }}
+spec:
+  selector:
+    {{- include "fourthdown.labels" (dict "root" . "component" "ollama") | nindent 4 }}
+  ports:
+    - port: 11434
+      targetPort: 11434
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-ollama-pull-{{ .Release.Revision }}
+  labels:
+    {{- include "fourthdown.labels" (dict "root" . "component" "ollama-pull") | nindent 4 }}
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: pull
+          image: {{ .Values.ollama.image }}
+          env:
+            - name: OLLAMA_HOST
+              value: {{ include "fourthdown.ollamaHost" . | quote }}
+          command: ["sh", "-c"]
+          args:
+            - ollama pull {{ .Values.llm.model | quote }} && ollama pull {{ .Values.llm.embedModel | quote }}
+{{- end }}

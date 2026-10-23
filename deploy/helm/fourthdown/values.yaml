@@ -1,0 +1,53 @@
+# Images are "<image.prefix>-<service>:<image.tag>", built from the repo Dockerfile with
+# `docker build --target <service>`; `make kind-up` builds and loads them into kind.
+image:
+  prefix: fourthdown
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# Directory on the node holding the built warehouse, Parquet partitions, and trained
+# models (`make build train`), mounted read-only into the warehouse and models services.
+# deploy/kind.yaml maps the repo's data/ to this path. A single-node cluster is assumed;
+# on a real cluster replace this with a ReadOnlyMany volume.
+data:
+  hostPath: /fourthdown-data
+
+llm:
+  model: qwen2.5-coder:7b
+  embedModel: nomic-embed-text
+
+# One entry per application service: port, replica count, and whether it mounts data/.
+# Each service holds one non-thread-safe handle, so scale with replicas, not threads.
+services:
+  gateway:
+    port: 8000
+    replicas: 1
+    data: false
+  warehouse:
+    port: 8001
+    replicas: 1
+    data: true
+  retrieval:
+    port: 8002
+    replicas: 1
+    data: false
+  models:
+    port: 8003
+    replicas: 1
+    data: true
+
+postgres:
+  # false to use an external database at `externalDsn`.
+  enabled: true
+  image: pgvector/pgvector:pg16
+  # Required when enabled: `--set postgres.password=...`. Never committed.
+  password: ""
+  storage: 2Gi
+  externalDsn: ""
+
+ollama:
+  # false to use an external Ollama at `externalHost`.
+  enabled: true
+  image: ollama/ollama
+  storage: 10Gi
+  externalHost: ""

@@ -183,10 +183,48 @@ no narrative tool; no artifacts means no advisor; no Ollama means keyword routin
 SQL authoring. `/api/health` reports the state and the reason, and the dashboard disables
 what it cannot reach — a fresh clone with nothing built still starts and explains itself.
 
-The flip side of holding a DuckDB connection, a pgvector pool, and a torch checkpoint for
-the process lifetime is that the app is single-worker by design. Multi-worker serving
-(gunicorn with preload, or the model behind its own server) belongs with the container
-work in phase 07.
+Each service holds its own DuckDB connection, Postgres connection, or torch model for the
+process lifetime and serves one request at a time; capacity comes from replicas, not
+threads.
+
+## Services (phase 07)
+
+```
+                     ┌─► warehouse :8001 ── DuckDB (read-only) ─────┐
+browser ──► gateway ─┼─► retrieval :8002 ── Postgres + pgvector ────┼─► Ollama
+            :8000  │ └─► models    :8003 ── torch artifacts         │
+                   └────────────────────────────────────────────────┘ (routing)
+```
+
+**Split by backing store.** Each service owns exactly one store and the tools that read
+it, so each has one reason to fail and one set of heavy dependencies. The gateway owns
+nothing: it routes, forwards, and serves the dashboard, and its image has no DuckDB,
+psycopg, or torch. `tests/test_service_isolation.py` imports each service in a fresh
+interpreter and fails if it loads another service's dependencies.
+
+**Discovery, not configuration.** Tool services publish their catalog on `/health` --
+names and the descriptions the router reads -- and the gateway polls it (cached for 15
+seconds). A service that is down contributes no tools, so the router never picks one that
+cannot run; one that disappears mid-request yields a failed answer naming it, not a 500.
+
+**Start in any order, heal in place.** A service that comes up without its store reports
+what is missing and retries every 30 seconds. Postgres arriving late, a model finishing
+its download, or `fourthdown train` writing artifacts all heal a running deployment
+without a restart.
+
+**One contract.** `/health` (200 with tools loaded, 503 without, so it is also the
+readiness probe) and `POST /tools/<name>` returning the `Evidence` envelope. The
+structured endpoints the dashboard uses, `/advise` and `/tendencies`, are proxied by the
+gateway to whichever service owns `advisor` and `tendency`.
+
+## Evaluation in CI (phase 06)
+
+Every eval command takes a floor and exits non-zero below it, after writing its report.
+Keyword routing is deterministic and needs no data or model, so it gates every push. The
+LLM-dependent and data-heavy evaluations -- text-to-SQL, LLM routing, retrieval over a
+freshly built index, and a full retrain with the win-probability and play-call floors --
+run weekly and on demand (`.github/workflows/eval.yml`). The floors sit at the published
+scores, so a regression fails the run and an improvement is a deliberate floor raise.
 
 ## Phase status
 

@@ -1,0 +1,66 @@
+{{- /* In-cluster Postgres with pgvector, for the retrieval service's narrative index. */}}
+{{- if .Values.postgres.enabled }}
+{{- $name := include "fourthdown.name" . }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}-postgres
+  labels:
+    {{- include "fourthdown.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  serviceName: {{ $name }}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fourthdown.labels" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          env:
+            - name: POSTGRES_USER
+              value: fourthdown
+            - name: POSTGRES_DB
+              value: fourthdown
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-postgres
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "fourthdown"]
+            periodSeconds: 5
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-postgres
+  labels:
+    {{- include "fourthdown.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+spec:
+  selector:
+    {{- include "fourthdown.labels" (dict "root" . "component" "postgres") | nindent 4 }}
+  ports:
+    - port: 5432
+      targetPort: 5432
+{{- end }}

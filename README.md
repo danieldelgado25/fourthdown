@@ -6,11 +6,12 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 05 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
+**Status: phase 07 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
 text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
-models (win probability, the fourth-down advisor, run/pass play call), and the serving
-layer: a tool-routing orchestrator behind a Flask API and a React dashboard. Remaining
-phases are listed in [docs/architecture.md](docs/architecture.md).
+models (win probability, the fourth-down advisor, run/pass play call), a tool-routing
+gateway with a React dashboard over four independently deployable services, gated
+evaluation in CI, and Docker Compose and Helm deployments. Design notes and phase history
+are in [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
@@ -66,7 +67,8 @@ rendered into deterministic English — one document per game, one per drive —
 embedded with Ollama and stored in Postgres with pgvector:
 
 ```bash
-docker compose up -d                         # pgvector/pgvector:pg16 on :5432
+cp .env.example .env                         # pick a password; export FOURTHDOWN_PG_DSN to match
+docker compose up -d                         # pgvector/pgvector:pg16 on 127.0.0.1:5432
 ollama pull nomic-embed-text
 fourthdown index --seasons 2009- --playoff-drives    # ~8.6k documents
 fourthdown recall "the comeback from 28-3"           # passages + provenance
@@ -133,7 +135,7 @@ citations, or the win-probability value of every fourth-down option.
 
 ```bash
 fourthdown chat "should they go for it on 4th and 2 from the 38, down 3 with 4 minutes left?"
-make serve                                   # Flask on :8000
+make up                                      # every service in Docker; dashboard on :8000
 make web-install && make web                 # Vite dev server on :5173, proxying /api
 make eval-routing                            # -> docs/routing_eval.md
 ```
@@ -147,7 +149,8 @@ keeping the cheap one as the fallback.
 Every dependency is optional at startup. Missing Postgres drops the narrative tool,
 missing model artifacts drop the advisor, missing Ollama drops LLM routing — the API
 reports what is loaded on `/api/health` and the dashboard greys out what it cannot do,
-rather than erroring on first use.
+rather than erroring on first use. Services retry what is missing every 30 seconds, so
+pulling a model or finishing `fourthdown train` heals a running deployment.
 
 | endpoint | purpose |
 | --- | --- |
@@ -156,8 +159,59 @@ rather than erroring on first use.
 | `POST /api/advise` | fourth-down state in, ranked go / field goal / punt out |
 | `GET /api/tendencies` | neutral-script pass rate and EPA by team for a season |
 
-The services (DuckDB connection, pgvector pool, torch checkpoint) are opened once and
-held read-only for the life of the process, which makes the app single-worker by design.
+### Services
+
+The app runs as four independently deployable services. Each owns one backing store, ships
+as its own image with only its own dependencies, and can fail, restart, or scale without
+the others:
+
+| service | port | owns | image carries |
+| --- | --- | --- | --- |
+| gateway | 8000 | routing, the public `/api/*`, the dashboard | Flask, requests |
+| warehouse | 8001 | `stats` (text-to-SQL), `tendency` | + DuckDB, sqlglot |
+| retrieval | 8002 | `narrative` | + psycopg |
+| models | 8003 | `advisor` | + torch, scikit-learn |
+
+Tool services share one contract: `GET /health` lists the tools they have loaded (with
+the descriptions the router reads) and `POST /tools/<name>` runs one. The gateway
+discovers tools by polling `/health` and imports none of the services' code, so adding a
+tool means deploying a service, not editing the gateway. A test fails the build if any
+service starts importing another's dependencies.
+
+`fourthdown chat` builds the same tools in-process, so the CLI needs no running services.
+
+### Running it in Docker
+
+Data is mounted, not baked in, so build and train on the host first:
+
+```bash
+cp .env.example .env                         # set POSTGRES_PASSWORD
+make build train index                       # data/ on the host
+make up                                      # postgres, ollama, and the four services
+```
+
+A one-shot `ollama-pull` container fetches the chat and embedding models into a volume;
+the services pick them up when the download finishes. Without Docker, run each service
+with `make serve-warehouse`, `serve-retrieval`, `serve-models`, and `serve-gateway`.
+
+### Running it on Kubernetes
+
+`deploy/helm/fourthdown` deploys the four services, with in-cluster Postgres and Ollama
+(either can point at an external one instead: `postgres.enabled=false` with
+`postgres.externalDsn`, `ollama.enabled=false` with `ollama.externalHost`). Readiness
+probes use each service's `/health`, so a pod is only sent traffic once it has tools
+loaded. Locally, on a single-node [kind](https://kind.sigs.k8s.io) cluster with the repo's
+`data/` mounted on the node:
+
+```bash
+make kind-up                                 # cluster, images, helm install
+make kind-forward                            # dashboard on http://localhost:8000
+make kind-down
+```
+
+The warehouse stores its Parquet glob relative to the data root, so the same
+`fourthdown.duckdb` opens on the host and at `/data` in a container. Warehouses built
+before that change need one `fourthdown warehouse` to pick it up.
 
 ## Layout
 
@@ -199,12 +253,16 @@ src/fourthdown/
     golden_routing.json    20 questions labelled with the tool that should answer them
     routing_harness.py     keyword vs LLM routing accuracy and misroutes
   agent/
-    tools.py          stats / narrative / advisor / tendency behind one Tool protocol
+    tools.py          the Tool protocol and the Evidence envelope, and their wire format
     parse.py          question -> season, team, and fourth-down game state
     router.py         LLM tool choice with a keyword router as the fallback
     assistant.py      route, run, and return structured evidence
-    build.py          open what is available, report what is not
-  api/app.py          Flask factory over one long-lived Services
+  services/
+    common.py         the tool-service contract: /health, /tools/<name>, self-healing
+    gateway.py        tool discovery, routing, the public API, and the dashboard
+    warehouse.py      stats and tendency tools over DuckDB
+    retrieval.py      the narrative tool over pgvector
+    models.py         the advisor tool and /advise over the trained models
 web/
   src/api.ts          the typed wire format
   src/App.tsx         readiness bar and the three panels
@@ -236,7 +294,7 @@ Data is gitignored. `make build` reproduces it.
 ## Development
 
 ```bash
-make lint typecheck test     # ruff, mypy, pytest
+make lint typecheck test     # ruff, mypy, pytest (keyword routing is gated in CI too)
 make web-test                # tsc, vite build, vitest
 ```
 
@@ -246,3 +304,12 @@ a separate `fourthdown_test` database so the development index survives.
 Tests marked `slow` assert against the built warehouse (season play counts, the
 neutral-vs-overall pass-rate gap, the rise in passing across the period) and skip when it
 is absent.
+
+### Evaluation in CI
+
+Every eval command takes a floor (`--min-accuracy`, `--min-correct`, `--min-hit-at-1`,
+`--max-wp-log-loss`, `--min-play-call-accuracy`) and exits non-zero below it, after
+writing its report. Keyword routing needs neither data nor an LLM, so it gates every push.
+The rest -- text-to-SQL and LLM routing against Ollama, retrieval over a fresh index, and
+a full retrain -- runs weekly and on demand in `.github/workflows/eval.yml`, with floors
+at the published scores and the reports uploaded as an artifact.

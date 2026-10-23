@@ -5,9 +5,10 @@ import pytest
 from fourthdown.agent.assistant import Assistant
 from fourthdown.agent.parse import parse_season, parse_state, parse_team
 from fourthdown.agent.router import KeywordRouter, LLMRouter
-from fourthdown.agent.tools import Evidence, Table, TendencyTool
+from fourthdown.agent.tools import Evidence, Table, ToolError
 from fourthdown.evaluation import routing_harness
 from fourthdown.llm import LLMError
+from fourthdown.services.warehouse import TendencyTool
 from tests.conftest import ScriptedClient
 
 
@@ -28,7 +29,7 @@ class ExplodingTool:
     description = "raises"
 
     def run(self, question: str) -> Evidence:
-        raise LLMError("ollama is not running")
+        raise ToolError("ollama is not running")
 
 
 @pytest.fixture()

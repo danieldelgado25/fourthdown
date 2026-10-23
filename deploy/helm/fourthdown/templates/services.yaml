@@ -1,0 +1,90 @@
+{{- /*
+One Deployment and one ClusterIP Service per entry in .Values.services. Tool services are
+ready when /health returns 200 (at least one tool loaded); the gateway when /api/health
+answers. Liveness is a TCP check, so a service waiting on a dependency is not restarted --
+it heals itself (see fourthdown.services.common).
+*/}}
+{{- $root := . }}
+{{- $name := include "fourthdown.name" . }}
+{{- range $service, $svc := .Values.services }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-{{ $service }}
+  labels:
+    {{- include "fourthdown.labels" (dict "root" $root "component" $service) | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fourthdown.labels" (dict "root" $root "component" $service) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" (dict "root" $root "component" $service) | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ $service }}
+          image: "{{ $root.Values.image.prefix }}-{{ $service }}:{{ $root.Values.image.tag }}"
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ $svc.port }}
+          env:
+            - name: FOURTHDOWN_PORT
+              value: {{ $svc.port | quote }}
+            - name: OLLAMA_HOST
+              value: {{ include "fourthdown.ollamaHost" $root | quote }}
+            - name: FOURTHDOWN_LLM_MODEL
+              value: {{ $root.Values.llm.model | quote }}
+            - name: FOURTHDOWN_EMBED_MODEL
+              value: {{ $root.Values.llm.embedModel | quote }}
+            {{- if eq $service "gateway" }}
+            - name: FOURTHDOWN_SERVICES
+              value: {{ include "fourthdown.serviceUrls" $root | quote }}
+            {{- end }}
+            {{- if eq $service "retrieval" }}
+            - name: FOURTHDOWN_PG_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-postgres
+                  key: dsn
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: {{ if eq $service "gateway" }}/api/health{{ else }}/health{{ end }}
+              port: {{ $svc.port }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: {{ $svc.port }}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          {{- if $svc.data }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+          {{- end }}
+      {{- if $svc.data }}
+      volumes:
+        - name: data
+          hostPath:
+            path: {{ $root.Values.data.hostPath }}
+            type: Directory
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-{{ $service }}
+  labels:
+    {{- include "fourthdown.labels" (dict "root" $root "component" $service) | nindent 4 }}
+spec:
+  selector:
+    {{- include "fourthdown.labels" (dict "root" $root "component" $service) | nindent 4 }}
+  ports:
+    - port: {{ $svc.port }}
+      targetPort: {{ $svc.port }}
+{{- end }}

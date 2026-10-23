@@ -1,0 +1,9 @@
+fourthdown is starting. Services report readiness as their dependencies appear; the
+Ollama models download in the background (Job {{ include "fourthdown.name" . }}-ollama-pull-{{ .Release.Revision }}).
+
+Open the dashboard:
+  kubectl port-forward svc/{{ include "fourthdown.name" . }}-gateway 8000:{{ .Values.services.gateway.port }}
+  then http://localhost:8000
+
+Check what is loaded:
+  curl -s localhost:8000/api/health

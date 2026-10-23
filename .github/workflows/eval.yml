@@ -1,0 +1,83 @@
+# The full evaluation harness, gated. Too slow for every push (a 7B model on CPU, the full
+# 2009-2024 warehouse, an embedding pass over ~8.5k narratives), so it runs weekly and on
+# demand. Every gate is a regression floor at the currently published score; raise a
+# floor when a change improves its metric. Reports are uploaded as an artifact either way.
+name: Evaluation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      FOURTHDOWN_PG_DSN: postgresql://fourthdown:fourthdown@localhost:5432/fourthdown
+      REPORTS: reports
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: fourthdown
+          POSTGRES_PASSWORD: fourthdown
+          POSTGRES_DB: fourthdown
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fourthdown"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      ollama:
+        image: ollama/ollama
+        ports:
+          - 11434:11434
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU torch (the default wheel drags in CUDA)
+        run: pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[dev]"
+      - name: Pull the chat and embedding models
+        run: |
+          for model in qwen2.5-coder:7b nomic-embed-text; do
+            curl -sf http://localhost:11434/api/pull -d "{\"model\": \"$model\", \"stream\": false}"
+          done
+      - uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: nflverse-raw-2009-2024
+      - run: fourthdown build --seasons 2009-2024
+      - run: mkdir -p "$REPORTS"
+
+      # Floors: published scores are 0.4553 log loss and 74.0% accuracy.
+      - name: Models
+        run: >-
+          fourthdown train --output "$REPORTS/model_eval.md"
+          --max-wp-log-loss 0.47 --min-play-call-accuracy 0.72
+      # Floor: both routers score 19/20.
+      - name: Routing
+        if: ${{ !cancelled() }}
+        run: fourthdown eval-routing --output "$REPORTS/routing_eval.md" --min-accuracy 0.9
+      # Floor: 7 of 15 golden questions answered correctly.
+      - name: Text-to-SQL
+        if: ${{ !cancelled() }}
+        run: fourthdown eval --output "$REPORTS/text_to_sql_eval.md" --min-correct 7
+      - name: Index narratives
+        if: ${{ !cancelled() }}
+        run: fourthdown index --seasons 2009- --playoff-drives
+      # Floor: hybrid hit@1 is 0.94 on 16 questions; one miss is 0.06.
+      - name: Retrieval
+        if: ${{ !cancelled() }}
+        run: fourthdown eval-retrieval --output "$REPORTS/retrieval_eval.md" --min-hit-at-1 0.85
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: evaluation-reports
+          path: reports/

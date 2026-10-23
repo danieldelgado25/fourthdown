@@ -159,11 +159,19 @@ VIEW_STATEMENTS: tuple[str, ...] = (
 
 
 def processed_glob(paths: Paths) -> str:
-    return str(paths.processed / "season=*" / "*.parquet")
+    """Relative to the data root, so the database survives being mounted somewhere else."""
+    return (paths.processed / "season=*" / "*.parquet").relative_to(paths.root).as_posix()
+
+
+def _anchor(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
+    """Resolve the views' relative Parquet glob against this machine's data root."""
+    root = str(paths.root).replace("'", "''")
+    connection.execute(f"SET file_search_path = '{root}'")
 
 
 def create_views(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
     """Define every view against the processed partitions of ``paths``."""
+    _anchor(connection, paths)
     connection.execute(PLAYS_VIEW.format(glob=processed_glob(paths)))
     for statement in VIEW_STATEMENTS:
         connection.execute(statement)
@@ -194,4 +202,6 @@ def connect(paths: Paths | None = None, *, read_only: bool = True) -> duckdb.Duc
         raise FileNotFoundError(
             f"warehouse missing at {resolved.database}. Run `fourthdown warehouse` first."
         )
-    return duckdb.connect(str(resolved.database), read_only=read_only)
+    connection = duckdb.connect(str(resolved.database), read_only=read_only)
+    _anchor(connection, resolved)
+    return connection

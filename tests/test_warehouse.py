@@ -3,6 +3,7 @@ from __future__ import annotations
 import duckdb
 import pytest
 
+from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, warehouse
 
 
@@ -47,6 +48,18 @@ def test_build_requires_processed_partitions(tmp_paths):
 def test_connect_requires_a_built_warehouse(tmp_paths):
     with pytest.raises(FileNotFoundError, match="warehouse missing"):
         warehouse.connect(tmp_paths)
+
+
+def test_warehouse_survives_moving_the_data_root(raw_frame, tmp_path):
+    # The container mounts the host's data/ at /data; the views must follow.
+    paths = data_paths(tmp_path / "host")
+    paths.ensure()
+    raw_frame.write_parquet(paths.season_raw(2023))
+    etl.transform_season(2023, paths)
+    warehouse.build(paths)
+    moved = data_paths(paths.root.rename(tmp_path / "container"))
+    with warehouse.connect(moved) as connection:
+        assert connection.execute("SELECT count(*) FROM games").fetchone() == (1,)
 
 
 def test_audit_report_renders_from_a_tiny_warehouse(connection):

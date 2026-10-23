@@ -177,7 +177,7 @@ def load_plays(
     if seasons is not None:
         listed = ", ".join(str(int(season)) for season in seasons)
         clause = f"({clause}) AND season IN ({listed})"
-    frame = connection.execute(BASE_SQL.format(where=clause)).pl()
+    frame = connection.sql(BASE_SQL.format(where=clause)).pl()
     LOGGER.info("loaded %s plays for modelling", f"{frame.height:,}")
     return frame
 

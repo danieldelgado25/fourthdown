@@ -1,0 +1,8 @@
+apiVersion: v2
+name: fourthdown
+description: >-
+  The fourthdown services (gateway, warehouse, retrieval, models), with optional in-cluster
+  Postgres (pgvector) and Ollama.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

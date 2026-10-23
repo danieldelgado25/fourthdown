@@ -20,14 +20,10 @@ from dataclasses import dataclass
 from importlib import resources
 
 from fourthdown.agent.router import Router
-from fourthdown.agent.tools import (
-    AdvisorTool,
-    Evidence,
-    NarrativeTool,
-    StatsTool,
-    TendencyTool,
-    Tool,
-)
+from fourthdown.agent.tools import Evidence, Tool
+from fourthdown.services.models import AdvisorTool
+from fourthdown.services.retrieval import NarrativeTool
+from fourthdown.services.warehouse import StatsTool, TendencyTool
 
 LOGGER = logging.getLogger(__name__)
 

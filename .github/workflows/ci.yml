@@ -8,6 +8,8 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      FOURTHDOWN_PG_DSN: postgresql://fourthdown:fourthdown@localhost:5432/fourthdown
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -35,6 +37,9 @@ jobs:
       - run: ruff format --check .
       - run: mypy
       - run: pytest -m "not slow"
+      # Keyword routing needs no data and no LLM, so its golden set gates every push.
+      # The rest of the harness runs in eval.yml.
+      - run: fourthdown eval-routing --output routing_eval.md --min-accuracy 0.9
 
   web:
     runs-on: ubuntu-latest
@@ -67,3 +72,28 @@ jobs:
         run: fourthdown build --seasons 2024
       - run: pytest -m slow
       - run: fourthdown audit
+      # Every service image builds; the gateway and the warehouse service then run on their
+      # own network against the warehouse just built, mounted read-only from another path:
+      # proves discovery over HTTP, the relocatable warehouse, and the dashboard.
+      - name: Build the service images
+        run: |
+          for target in gateway warehouse retrieval models; do
+            docker build --target "$target" -t "fourthdown-$target" .
+          done
+      - name: Run the gateway and the warehouse service
+        run: |
+          docker network create fourthdown
+          docker run -d --name warehouse --network fourthdown             -v "$PWD/data:/data:ro" fourthdown-warehouse
+          docker run -d --name gateway --network fourthdown -p 8000:8000             -e FOURTHDOWN_SERVICES=http://warehouse:8001 fourthdown-gateway
+      - name: Smoke test through the gateway
+        run: |
+          for _ in $(seq 30); do
+            curl -sf localhost:8000/api/health | grep -q '"warehouse": *true' && break
+            sleep 2
+          done
+          curl -sf localhost:8000/api/health | grep -q '"warehouse": *true'
+          curl -sf "localhost:8000/api/tendencies?season=2024" | grep -q '"rows": *\[\['
+          curl -sf localhost:8000/api/ask -H 'Content-Type: application/json'             -d '{"question": "how pass-heavy were the Chiefs in 2024"}' | grep -q '"tool": *"tendency"'
+          curl -sf localhost:8000/ | grep -q '<div id="root">'
+      - if: failure()
+        run: docker logs warehouse; docker logs gateway

@@ -21,10 +21,12 @@ import logging
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-
-import duckdb
+from typing import TYPE_CHECKING
 
 from fourthdown.narrative.teams import name, nickname
+
+if TYPE_CHECKING:
+    import duckdb
 
 LOGGER = logging.getLogger(__name__)
 

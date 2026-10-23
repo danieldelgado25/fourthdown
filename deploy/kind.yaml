@@ -1,0 +1,12 @@
+# A single-node kind cluster for the Helm chart. The repo's data/ (run `make build train`
+# first) is mounted on the node at /fourthdown-data, the chart's default data.hostPath.
+# `make kind-up` creates it from the repo root, where the relative hostPath resolves.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: fourthdown
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: ./data
+        containerPath: /fourthdown-data
+        readOnly: true
