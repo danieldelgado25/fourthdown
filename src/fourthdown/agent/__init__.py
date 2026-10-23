@@ -5,13 +5,14 @@ without DuckDB, Postgres, or torch installed. Concrete tools live in `fourthdown
 """
 
 from fourthdown.agent.assistant import Answer, Assistant, answer_json
-from fourthdown.agent.router import KeywordRouter, LLMRouter, Route, Router
+from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter, Route, Router
 from fourthdown.agent.tools import Evidence, Passage, Table, Tool, ToolError
 
 __all__ = [
     "Answer",
     "Assistant",
     "Evidence",
+    "HybridRouter",
     "KeywordRouter",
     "LLMRouter",
     "Passage",

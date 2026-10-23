@@ -217,6 +217,28 @@ def test_reloading_retries_while_degraded():
     assert len(opened) == 2, "a healthy service is not reopened"
 
 
+def test_reloading_never_reopens_concurrently():
+    import threading
+    import time
+
+    active, peak = [0], [0]
+
+    def open_(stack):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        time.sleep(0.02)  # long enough for other request threads to arrive mid-reopen
+        active[0] -= 1
+        return Capabilities(skipped={"warehouse": "still missing"})
+
+    resources = Reloading(open_, retry_seconds=0.0)
+    threads = [threading.Thread(target=resources.current) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert peak[0] == 1, "request threads must not reopen resources at the same time"
+
+
 def test_warehouse_tendencies_endpoint(warehouse_app):
     client = warehouse_app.test_client()
     body = client.get("/tendencies?season=2023").get_json()

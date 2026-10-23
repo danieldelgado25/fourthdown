@@ -37,6 +37,9 @@ spec:
       containers:
         - name: ollama
           image: {{ .Values.ollama.image }}
+          env:
+            - name: OLLAMA_CONTEXT_LENGTH
+              value: "8192"
           ports:
             - containerPort: 11434
           readinessProbe:

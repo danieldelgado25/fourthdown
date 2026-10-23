@@ -1,5 +1,5 @@
-"""LLM access. Ollama locally today; the protocol is the seam for anything else."""
+"""LLM access over the OpenAI-compatible chat API: Ollama, vLLM, or a hosted provider."""
 
-from fourthdown.llm.client import LLMClient, LLMError, OllamaClient, default_client
+from fourthdown.llm.client import ChatClient, LLMClient, LLMError, default_client
 
-__all__ = ["LLMClient", "LLMError", "OllamaClient", "default_client"]
+__all__ = ["ChatClient", "LLMClient", "LLMError", "default_client"]

@@ -32,6 +32,8 @@ jobs:
           --health-retries 10
       ollama:
         image: ollama/ollama
+        env:
+          OLLAMA_CONTEXT_LENGTH: "8192"
         ports:
           - 11434:11434
     steps:

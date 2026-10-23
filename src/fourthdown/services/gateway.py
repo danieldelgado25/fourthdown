@@ -2,9 +2,9 @@
 
 The gateway routes and never computes. It learns the tool catalog by polling each tool
 service's ``/health`` (names and descriptions come from the service that owns the tool),
-routes a question with the LLM router -- which falls back to keywords on its own when
-Ollama is down -- and forwards the question to the owning service. No DuckDB, Postgres,
-or torch is imported here; the gateway image installs none of them.
+routes a question with the hybrid router -- keyword cues first, the LLM only for questions
+without one, keywords again if the LLM is down -- and forwards it to the owning service.
+No DuckDB, Postgres, or torch is imported here; the gateway image installs none of them.
 
 Public endpoints (the contract `web/src/api.ts` types):
     ``GET  /api/health``     -- merged readiness of every service.
@@ -14,7 +14,8 @@ Public endpoints (the contract `web/src/api.ts` types):
     ``GET  /``               -- the built dashboard, when ``web/dist`` exists.
 
 Configuration: ``FOURTHDOWN_SERVICES`` (comma-separated base URLs of the tool services),
-``OLLAMA_HOST``, ``FOURTHDOWN_LLM_MODEL``, ``FOURTHDOWN_WEB_DIR``. Default port 8000.
+``FOURTHDOWN_TOOL_TIMEOUT``, ``FOURTHDOWN_WEB_DIR``, and the LLM settings in
+`fourthdown.llm.client`. Default port 8000.
 
 Run: ``python -m fourthdown.services.gateway`` or ``fourthdown serve gateway``.
 """
@@ -32,9 +33,9 @@ import requests
 from flask import Flask, Response, jsonify, request
 
 from fourthdown.agent.assistant import Assistant, answer_json
-from fourthdown.agent.router import LLMRouter
+from fourthdown.agent.router import HybridRouter
 from fourthdown.agent.tools import Evidence, ToolError, evidence_from_json
-from fourthdown.llm import LLMClient, OllamaClient
+from fourthdown.llm import LLMClient, default_client
 from fourthdown.services.common import (
     MAX_QUESTION_CHARS,
     configure_logging,
@@ -49,8 +50,10 @@ DEFAULT_SERVICES = "http://127.0.0.1:8001,http://127.0.0.1:8002,http://127.0.0.1
 COMPONENTS = ("warehouse", "llm", "retrieval", "models")
 CATALOG_TTL_SECONDS = 15.0
 HEALTH_TIMEOUT_SECONDS = 2.0
-TOOL_TIMEOUT_SECONDS = 180.0
-"""Generous: a text-to-SQL answer with two repairs on a CPU-bound 7B model is slow."""
+TOOL_TIMEOUT_SECONDS = float(os.environ.get("FOURTHDOWN_TOOL_TIMEOUT", 420.0))
+"""How long the gateway waits for a tool service (``FOURTHDOWN_TOOL_TIMEOUT``). The
+default covers text-to-SQL's worst case -- three attempts at the 120-second LLM timeout --
+so a slow answer arrives late rather than being abandoned while the service still works."""
 
 
 HTTP = Any
@@ -243,7 +246,7 @@ def create_app(catalog: Catalog, client: LLMClient, http: HTTP = requests) -> Fl
         if not tools:
             return jsonify({"error": "no tool service is available", "tools": []}), 503
         tool = payload.get("tool")
-        assistant = Assistant(tools, LLMRouter(tools, client))
+        assistant = Assistant(tools, HybridRouter(tools, client))
         try:
             answer = assistant.ask(question, tool=None if tool is None else str(tool))
         except KeyError:
@@ -284,7 +287,7 @@ def main(host: str | None = None, port: int | None = None, model: str | None = N
     """
     configure_logging()
     urls = os.environ.get("FOURTHDOWN_SERVICES", DEFAULT_SERVICES).split(",")
-    app = create_app(Catalog(urls, requests), OllamaClient(model))
+    app = create_app(Catalog(urls, requests), default_client(model))
     serve(app, host=host, port=port, default_port=PORT)
 
 

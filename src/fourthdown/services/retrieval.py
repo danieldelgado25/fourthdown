@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 
 from fourthdown.agent.tools import Evidence, Passage
-from fourthdown.llm import LLMClient, LLMError, OllamaClient
+from fourthdown.llm import LLMClient, LLMError, default_client
 from fourthdown.retrieval import recall
 from fourthdown.retrieval.embed import Embedder, EmbeddingError, default_embedder
 from fourthdown.retrieval.recall import Retriever
@@ -83,7 +83,7 @@ def opener(
     """Build the function `Reloading` calls to open this service's resources.
 
     Args:
-        client: The answering LLM; an `OllamaClient` from the environment if ``None``.
+        client: The answering LLM; a `ChatClient` from the environment if ``None``.
         embedder: Query embedder; must match the one the index was built with.
         dsn: Postgres URL; ``FOURTHDOWN_PG_DSN`` when ``None``.
 
@@ -91,7 +91,7 @@ def opener(
         A callable that connects to Postgres on the given stack and reports the
         ``retrieval`` and ``llm`` components. ``narrative`` needs both.
     """
-    llm = client or OllamaClient()
+    llm = client or default_client()
     query_embedder = embedder or default_embedder()
 
     def open_(stack: ExitStack) -> Capabilities:
@@ -122,7 +122,7 @@ def main(host: str | None = None, port: int | None = None, model: str | None = N
         model: Ollama model for answers; ``FOURTHDOWN_LLM_MODEL`` when ``None``.
     """
     configure_logging()
-    resources = Reloading(opener(client=OllamaClient(model)))
+    resources = Reloading(opener(client=default_client(model)))
     app = tool_service(NAME, resources, errors=(LLMError, StoreError, EmbeddingError))
     try:
         serve(app, host=host, port=port, default_port=PORT)

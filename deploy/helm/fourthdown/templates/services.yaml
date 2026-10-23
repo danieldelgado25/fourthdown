@@ -35,19 +35,32 @@ spec:
               value: {{ $svc.port | quote }}
             - name: OLLAMA_HOST
               value: {{ include "fourthdown.ollamaHost" $root | quote }}
+            - name: FOURTHDOWN_LLM_BASE_URL
+              value: {{ $root.Values.llm.baseUrl | default (printf "%s/v1" (include "fourthdown.ollamaHost" $root)) | quote }}
             - name: FOURTHDOWN_LLM_MODEL
               value: {{ $root.Values.llm.model | quote }}
+            - name: FOURTHDOWN_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $name }}-secrets
+                  key: llmApiKey
+            - name: FOURTHDOWN_LLM_TIMEOUT
+              value: {{ $root.Values.llm.timeoutSeconds | quote }}
+            - name: FOURTHDOWN_THREADS
+              value: {{ $root.Values.threads | quote }}
             - name: FOURTHDOWN_EMBED_MODEL
               value: {{ $root.Values.llm.embedModel | quote }}
             {{- if eq $service "gateway" }}
             - name: FOURTHDOWN_SERVICES
               value: {{ include "fourthdown.serviceUrls" $root | quote }}
+            - name: FOURTHDOWN_TOOL_TIMEOUT
+              value: {{ $root.Values.llm.toolTimeoutSeconds | quote }}
             {{- end }}
             {{- if eq $service "retrieval" }}
             - name: FOURTHDOWN_PG_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ $name }}-postgres
+                  name: {{ $name }}-secrets
                   key: dsn
             {{- end }}
           readinessProbe:

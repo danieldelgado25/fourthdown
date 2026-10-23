@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -30,6 +31,7 @@ from fourthdown.agent.tools import Evidence, Tool, evidence_json
 LOGGER = logging.getLogger(__name__)
 
 RETRY_SECONDS = 30.0
+DEFAULT_THREADS = 4
 MAX_QUESTION_CHARS = 500
 
 
@@ -70,32 +72,50 @@ class Reloading(Generic[C]):
         self._opener = opener
         self._retry_seconds = retry_seconds
         self._stack = ExitStack()
+        self._retired = ExitStack()
         self._state = opener(self._stack)
         self._opened = time.monotonic()
+        self._lock = threading.Lock()
 
     def current(self) -> C:
         """The open capabilities, reopened first if degraded and the retry interval passed.
+
+        Thread-safe: one request thread reopens while the others keep the current state.
 
         Returns:
             The most recent `Capabilities`. A failed reopen keeps the previous state.
         """
         stale = time.monotonic() - self._opened >= self._retry_seconds
-        if self._state.skipped and stale:
-            self._opened = time.monotonic()
-            stack = ExitStack()
-            try:
-                state = self._opener(stack)
-            except Exception:
-                LOGGER.exception("reopen failed; keeping the previous state")
-                stack.close()
-                return self._state
-            self._stack.close()
-            self._stack, self._state = stack, state
+        if not (self._state.skipped and stale) or not self._lock.acquire(blocking=False):
+            return self._state
+        try:
+            self._reopen()
+        finally:
+            self._lock.release()
         return self._state
 
+    def _reopen(self) -> None:
+        """Open afresh and swap the result in; caller holds the lock.
+
+        The replaced resources are retired rather than closed, and closed at the next swap
+        -- at least one retry interval later -- so requests still running against them
+        (a `tendency` query on a warehouse waiting for its LLM) are not cut off.
+        """
+        self._opened = time.monotonic()
+        stack = ExitStack()
+        try:
+            state = self._opener(stack)
+        except Exception:
+            LOGGER.exception("reopen failed; keeping the previous state")
+            stack.close()
+            return
+        self._retired.close()
+        self._retired, self._stack, self._state = self._stack, stack, state
+
     def close(self) -> None:
-        """Release everything the opener registered."""
+        """Release everything the opener registered, current and retired."""
         self._stack.close()
+        self._retired.close()
 
 
 def health_json(name: str, capabilities: Capabilities) -> dict[str, object]:
@@ -170,7 +190,7 @@ def llm_available(client: object) -> bool:
     """Whether an LLM client's model answers.
 
     Args:
-        client: Any `LLMClient`; one with an ``available()`` probe (`OllamaClient`) is
+        client: Any `LLMClient`; one with an ``available()`` probe (`ChatClient`) is
             asked, and one without (a test double) is assumed up.
     """
     probe = getattr(client, "available", None)
@@ -194,11 +214,13 @@ def serve(app: Flask, *, host: str | None, port: int | None, default_port: int) 
         port: Port; ``FOURTHDOWN_PORT`` or ``default_port`` when ``None``.
         default_port: The service's conventional port.
 
-    One thread, because each service holds a single DuckDB connection, Postgres
-    connection, or torch model that is not safe to share across threads. Scale a service
-    by running more replicas of it, not more threads.
+    ``FOURTHDOWN_THREADS`` request threads (default 4), so a slow LLM-backed answer does
+    not queue fast ones behind it. Shared handles are safe for this: DuckDB is queried
+    through a cursor per request, psycopg serialises use of its connection, and model
+    inference is read-only.
     """
     resolved_host = host or os.environ.get("FOURTHDOWN_HOST", "0.0.0.0")
     resolved_port = port or int(os.environ.get("FOURTHDOWN_PORT", default_port))
     LOGGER.info("serving %s on %s:%d", app.name, resolved_host, resolved_port)
-    waitress.serve(app, host=resolved_host, port=resolved_port, threads=1)
+    threads = int(os.environ.get("FOURTHDOWN_THREADS", DEFAULT_THREADS))
+    waitress.serve(app, host=resolved_host, port=resolved_port, threads=threads)

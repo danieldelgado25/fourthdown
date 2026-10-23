@@ -2,9 +2,18 @@
 # `docker compose --profile app up -d --build` (or `make up`) runs every service; the
 # dashboard is on http://localhost:8000. Services start in any order and heal as their
 # dependencies (Postgres, Ollama models, trained artifacts) appear.
+# The chat model is any OpenAI-compatible endpoint (see fourthdown.llm.client): the bundled
+# Ollama by default, or a GPU server / hosted API by setting these three in .env. Narrative
+# embeddings always come from Ollama, so they match the index.
 x-ollama: &ollama
   OLLAMA_HOST: http://ollama:11434
+  FOURTHDOWN_LLM_BASE_URL: ${FOURTHDOWN_LLM_BASE_URL:-http://ollama:11434/v1}
   FOURTHDOWN_LLM_MODEL: ${FOURTHDOWN_LLM_MODEL:-qwen2.5-coder:7b}
+  FOURTHDOWN_LLM_API_KEY: ${FOURTHDOWN_LLM_API_KEY:-}
+  # Generous for the bundled CPU model (~10 tok/s reading a ~2k-token SQL prompt); lower
+  # both when pointing at a GPU or hosted endpoint. The gateway allows 3 completions.
+  FOURTHDOWN_LLM_TIMEOUT: ${FOURTHDOWN_LLM_TIMEOUT:-300}
+  FOURTHDOWN_TOOL_TIMEOUT: ${FOURTHDOWN_TOOL_TIMEOUT:-960}
 
 services:
   postgres:
@@ -26,6 +35,8 @@ services:
   ollama:
     image: ollama/ollama
     profiles: [app]
+    environment:
+      OLLAMA_CONTEXT_LENGTH: 8192   # the schema card plus repair history fits
     ports:
       - "127.0.0.1:11434:11434"   # so the host CLI can index and evaluate against it
     volumes:

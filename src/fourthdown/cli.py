@@ -13,12 +13,12 @@ from typing import Annotated
 import typer
 
 from fourthdown.agent.assistant import Assistant
-from fourthdown.agent.router import KeywordRouter, LLMRouter
+from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter
 from fourthdown.agent.tools import Tool
 from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, ingest, warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness
-from fourthdown.llm import LLMError, OllamaClient, default_client
+from fourthdown.llm import LLMError, default_client
 from fourthdown.models import fourth_down
 from fourthdown.models import train as training
 from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
@@ -81,7 +81,9 @@ DataDir = Annotated[Path | None, typer.Option("--data-dir", help="Overrides FOUR
 Verbose = Annotated[bool, typer.Option("--verbose", "-v")]
 Output = Annotated[Path, typer.Option("--output", "-o")]
 Force = Annotated[bool, typer.Option("--force", help="Re-download seasons already on disk.")]
-Model = Annotated[str | None, typer.Option("--model", help="Ollama model; overrides the default.")]
+Model = Annotated[
+    str | None, typer.Option("--model", help="LLM model id; overrides FOURTHDOWN_LLM_MODEL.")
+]
 Grains = Annotated[str, typer.Option("--grains", help="Comma separated: game, drive.")]
 TopK = Annotated[int, typer.Option("--k", help="Passages to retrieve.")]
 Grain = Annotated[str | None, typer.Option("--grain", help="Restrict to 'game' or 'drive'.")]
@@ -181,7 +183,7 @@ def ask_cmd(
 ) -> None:
     """Answer a question by generating, validating, and running DuckDB SQL."""
     _configure_logging(verbose)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with warehouse.connect(data_paths(data_dir)) as connection:
         chain = TextToSQL(connection, client)
         try:
@@ -214,7 +216,7 @@ def eval_cmd(
 ) -> None:
     """Run the golden question set and write the execution-accuracy report."""
     _configure_logging(verbose)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with warehouse.connect(data_paths(data_dir)) as connection:
         chain = TextToSQL(connection, client)
         report = harness.evaluate(connection, chain)
@@ -301,7 +303,7 @@ def explain_cmd(
 ) -> None:
     """Answer a narrative question from retrieved passages, with citations."""
     _configure_logging(verbose)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with DocumentStore.open() as store:
         retriever = Retriever(store, default_embedder())
         try:
@@ -432,7 +434,7 @@ def chat_cmd(
     """Route one question to SQL, retrieval, the advisor, or tendencies, and answer it."""
     _configure_logging(verbose)
     paths = data_paths(data_dir)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with ExitStack() as stack:
         tools: list[Tool] = []
         # The same openers the services use, in one process: no services need be running.
@@ -448,7 +450,7 @@ def chat_cmd(
         if not tools:
             typer.echo("nothing is available to answer with", err=True)
             raise typer.Exit(code=1)
-        assistant = Assistant(tools, LLMRouter(tools, client))
+        assistant = Assistant(tools, HybridRouter(tools, client))
         try:
             answer = assistant.ask(question, tool=tool)
         except KeyError:
@@ -498,17 +500,18 @@ def eval_routing_cmd(
     model: Model = None,
     verbose: Verbose = False,
 ) -> None:
-    """Score keyword and LLM routing on the golden routing set."""
+    """Score keyword, LLM, and hybrid (the one that serves) routing on the golden set."""
     _configure_logging(verbose)
     tools = routing_harness.catalog()
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     reports = [routing_harness.evaluate(KeywordRouter(tools), name="keyword")]
     if client.available():
-        reports.append(
-            routing_harness.evaluate(LLMRouter(tools, client), name=f"llm ({client.model})")
-        )
+        reports += [
+            routing_harness.evaluate(LLMRouter(tools, client), name=f"llm ({client.model})"),
+            routing_harness.evaluate(HybridRouter(tools, client), name=f"hybrid ({client.model})"),
+        ]
     else:
-        typer.echo(f"skipping the LLM router: no {client.model} at {client.host}", err=True)
+        typer.echo(f"skipping the LLM router: no {client.model} at {client.base_url}", err=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(routing_harness.render(reports))
     for report in reports:

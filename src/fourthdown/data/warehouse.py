@@ -164,9 +164,12 @@ def processed_glob(paths: Paths) -> str:
 
 
 def _anchor(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
-    """Resolve the views' relative Parquet glob against this machine's data root."""
+    """Resolve the views' relative Parquet glob against this machine's data root.
+
+    GLOBAL, so cursors taken from the connection for concurrent requests inherit it.
+    """
     root = str(paths.root).replace("'", "''")
-    connection.execute(f"SET file_search_path = '{root}'")
+    connection.execute(f"SET GLOBAL file_search_path = '{root}'")
 
 
 def create_views(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:

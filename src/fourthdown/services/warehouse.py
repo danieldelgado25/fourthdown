@@ -27,7 +27,7 @@ from fourthdown.agent.parse import parse_season, parse_team
 from fourthdown.agent.tools import Evidence, Table, summarise
 from fourthdown.config import Paths, data_paths
 from fourthdown.data import warehouse
-from fourthdown.llm import LLMClient, LLMError, OllamaClient
+from fourthdown.llm import LLMClient, LLMError, default_client
 from fourthdown.rag.text_to_sql import TextToSQL
 from fourthdown.services.common import (
     Capabilities,
@@ -70,9 +70,10 @@ def tendencies(
     Returns:
         One row per team with at least 50 qualifying plays, most pass-heavy first.
     """
-    cursor = connection.execute(TENDENCY_SQL, [season, team, team])
-    columns = tuple(description[0] for description in cursor.description or ())
-    return Table(columns=columns, rows=[list(row) for row in cursor.fetchall()])
+    with connection.cursor() as cursor:  # one per request; connections are not thread-safe
+        cursor.execute(TENDENCY_SQL, [season, team, team])
+        columns = tuple(description[0] for description in cursor.description or ())
+        return Table(columns=columns, rows=[list(row) for row in cursor.fetchall()])
 
 
 class StatsTool:
@@ -166,7 +167,7 @@ def opener(
 
     Args:
         paths: Data layout; ``FOURTHDOWN_DATA_DIR`` or the repo default when ``None``.
-        client: The LLM for text-to-SQL; an `OllamaClient` from the environment if ``None``.
+        client: The LLM for text-to-SQL; a `ChatClient` from the environment if ``None``.
 
     Returns:
         A callable that opens the warehouse read-only on the given stack and reports the
@@ -174,7 +175,7 @@ def opener(
         ``stats`` also needs the LLM.
     """
     resolved = paths or data_paths()
-    llm = client or OllamaClient()
+    llm = client or default_client()
 
     def open_(stack: ExitStack) -> WarehouseCapabilities:
         state = WarehouseCapabilities()
@@ -235,7 +236,7 @@ def main(host: str | None = None, port: int | None = None, model: str | None = N
         model: Ollama model for text-to-SQL; ``FOURTHDOWN_LLM_MODEL`` when ``None``.
     """
     configure_logging()
-    resources = Reloading(opener(client=OllamaClient(model)))
+    resources = Reloading(opener(client=default_client(model)))
     try:
         serve(create_app(resources), host=host, port=port, default_port=PORT)
     finally:

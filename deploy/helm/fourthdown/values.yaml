@@ -12,12 +12,22 @@ image:
 data:
   hostPath: /fourthdown-data
 
+# The chat model is any OpenAI-compatible endpoint: in-cluster Ollama when baseUrl is
+# empty, otherwise e.g. a vLLM service or a hosted API (key via --set llm.apiKey=...).
+# Embeddings always come from Ollama, to match the narrative index.
 llm:
   model: qwen2.5-coder:7b
   embedModel: nomic-embed-text
+  baseUrl: ""
+  apiKey: ""
+  # Per-completion timeout, and how long the gateway waits for a tool (>= 3 completions).
+  timeoutSeconds: 120
+  toolTimeoutSeconds: 420
+
+# Request threads per service pod; a slow LLM answer does not block fast ones.
+threads: 4
 
 # One entry per application service: port, replica count, and whether it mounts data/.
-# Each service holds one non-thread-safe handle, so scale with replicas, not threads.
 services:
   gateway:
     port: 8000
