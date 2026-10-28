@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import duckdb
-
 from fourthdown.data import etl, ingest, provenance, warehouse
 
 
@@ -113,5 +111,5 @@ def test_render_lists_views_partitions_and_sources(raw_frame, tmp_paths):
 
 def test_views_built_from_the_manifest_still_query(raw_frame, tmp_paths):
     _build(raw_frame, tmp_paths)
-    with duckdb.connect(str(tmp_paths.database), read_only=True) as connection:
+    with warehouse.connect(tmp_paths) as connection:
         assert connection.execute("SELECT count(*) FROM plays").fetchone() == (raw_frame.height,)

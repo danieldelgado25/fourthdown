@@ -1,0 +1,92 @@
+{{- /*
+One Deployment and one Service per entry in .Values.services. Tool services are ready
+when /health returns 200 (at least one tool loaded); the gateway when /api/health
+answers. Liveness is a TCP check, so a service waiting on a dependency -- the pipeline
+Job, the index, an Ollama pull -- is not restarted: it heals itself
+(see fourthdown.services.common).
+*/}}
+{{- $root := . }}
+{{- $name := include "fourthdown.fullname" . }}
+{{- range $service, $svc := .Values.services }}
+{{- $exposed := $svc.service | default dict }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-{{ $service }}
+  labels:
+    {{- include "fourthdown.labels" $root | nindent 4 }}
+spec:
+  type: {{ $exposed.type | default "ClusterIP" }}
+  selector:
+    {{- include "fourthdown.selector" (dict "root" $root "component" $service) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $svc.port }}
+      targetPort: http
+      {{- with $exposed.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-{{ $service }}
+  labels:
+    {{- include "fourthdown.labels" $root | nindent 4 }}
+spec:
+  replicas: {{ $svc.replicas }}
+  selector:
+    matchLabels:
+      {{- include "fourthdown.selector" (dict "root" $root "component" $service) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fourthdown.labels" $root | nindent 8 }}
+        {{- include "fourthdown.selector" (dict "root" $root "component" $service) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $root.Template.BasePath "/configmap.yaml") $root | sha256sum }}
+        {{- if $svc.data }}
+        # A service reopens only what is missing, so a rebuild must roll it.
+        fourthdown/pipeline: {{ include "fourthdown.pipelineJob" $root }}
+        {{- end }}
+    spec:
+      {{- include "fourthdown.appSecurity" $root | nindent 6 }}
+      containers:
+        - name: {{ $service }}
+          image: {{ include "fourthdown.appImage" (dict "root" $root "target" $service) }}
+          imagePullPolicy: {{ $root.Values.images.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ $name }}
+          env:
+            - name: FOURTHDOWN_PORT
+              value: {{ $svc.port | quote }}
+            {{- include "fourthdown.secretEnv" $root | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $svc.port }}
+          readinessProbe:
+            httpGet:
+              path: {{ if eq $service "gateway" }}/api/health{{ else }}/health{{ end }}
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml $svc.resources | nindent 12 }}
+          {{- if $svc.data }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}-data
+          {{- end }}
+{{- end }}

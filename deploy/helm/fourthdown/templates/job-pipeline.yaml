@@ -15,14 +15,12 @@ spec:
       {{- include "fourthdown.appSecurity" . | nindent 6 }}
       containers:
         - name: pipeline
-          image: {{ include "fourthdown.image" .Values.images.app }}
-          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          image: {{ include "fourthdown.appImage" (dict "root" . "target" "pipeline") }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           command: ["fourthdown-pipeline"]
           envFrom:
             - configMapRef:
                 name: {{ include "fourthdown.fullname" . }}
-          env:
-            {{- include "fourthdown.appEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.pipeline.resources | nindent 12 }}
           volumeMounts:

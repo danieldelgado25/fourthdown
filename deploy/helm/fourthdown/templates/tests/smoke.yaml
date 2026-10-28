@@ -14,11 +14,12 @@ spec:
     runAsUser: 10001
   containers:
     - name: smoke
-      image: {{ include "fourthdown.image" .Values.images.app }}
-      imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+      # The gateway image is the smallest with Python; the test needs only the stdlib.
+      image: {{ include "fourthdown.appImage" (dict "root" . "target" "gateway") }}
+      imagePullPolicy: {{ .Values.images.pullPolicy }}
       env:
-        - name: WEB
-          value: {{ printf "http://%s-web:%v" (include "fourthdown.fullname" .) .Values.web.service.port }}
+        - name: GATEWAY
+          value: {{ printf "http://%s-gateway:%v" (include "fourthdown.fullname" .) .Values.services.gateway.port }}
         - name: WINPROB
           value: {{ if .Values.winprob.enabled }}{{ printf "http://%s-winprob:%v" (include "fourthdown.fullname" .) .Values.winprob.service.port }}{{ end }}
       command: ["python", "-c"]
@@ -32,14 +33,17 @@ spec:
               with urllib.request.urlopen(request, timeout=60) as response:
                   return json.load(response)
 
-          web = os.environ["WEB"]
-          health = get(f"{web}/api/health")
+          gateway = os.environ["GATEWAY"]
+          health = get(f"{gateway}/api/health")
           print("health", health)
           assert health["warehouse"] and health["models"], health
-          advice = get(f"{web}/api/advise", {"yardline_100": 38, "ydstogo": 2,
-                                             "game_seconds_remaining": 240, "score_differential": -3})
+          advice = get(f"{gateway}/api/advise", {"yardline_100": 38, "ydstogo": 2,
+                                                 "game_seconds_remaining": 240, "score_differential": -3})
           print("advice", advice.get("best"), advice.get("edge"))
           assert advice.get("best") and advice.get("options"), advice
+          answer = get(f"{gateway}/api/ask", {"question": "how pass-heavy were the Chiefs in 2024"})
+          print("ask routed to", answer.get("tool"))
+          assert answer.get("tool") == "tendency", answer
           if os.environ.get("WINPROB"):
               body = {"yardline_100": 45, "down": 2, "ydstogo": 7,
                       "game_seconds_remaining": 900, "score_differential": 3}

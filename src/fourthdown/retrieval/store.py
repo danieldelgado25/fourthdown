@@ -27,7 +27,7 @@ from fourthdown.narrative import Document
 
 LOGGER = logging.getLogger(__name__)
 
-DEFAULT_DSN = "postgresql://fourthdown:fourthdown@localhost:5432/fourthdown"
+CONNECT_TIMEOUT_SECONDS = 10
 RRF_K = 60
 """The constant in reciprocal rank fusion; 60 is the value from the original paper."""
 
@@ -41,7 +41,11 @@ class StoreError(RuntimeError):
 
 
 def dsn() -> str:
-    return os.environ.get("FOURTHDOWN_PG_DSN", DEFAULT_DSN)
+    """No default: a missing setting must not fall back to well-known credentials."""
+    value = os.environ.get("FOURTHDOWN_PG_DSN")
+    if not value:
+        raise StoreError("FOURTHDOWN_PG_DSN is not set (see .env.example)")
+    return value
 
 
 @dataclass(frozen=True)
@@ -162,12 +166,27 @@ class DocumentStore:
 
     @classmethod
     def open(cls, url: str | None = None) -> DocumentStore:
+        """Connect to the store.
+
+        Args:
+            url: Postgres URL; ``FOURTHDOWN_PG_DSN`` when ``None``.
+
+        Returns:
+            An open store; use it as a context manager to close the connection.
+
+        Raises:
+            StoreError: Postgres is unreachable or rejected the connection. Bounded by
+                `CONNECT_TIMEOUT_SECONDS`, because psycopg otherwise waits forever on an
+                address that drops packets (``localhost`` -> ``::1`` when the server
+                listens on IPv4 only), which would hang a service's health check.
+        """
         try:
-            connection = psycopg.connect(url or dsn(), autocommit=True)
+            connection = psycopg.connect(
+                url or dsn(), autocommit=True, connect_timeout=CONNECT_TIMEOUT_SECONDS
+            )
         except psycopg.Error as error:
             raise StoreError(
-                f"could not connect to Postgres at {url or dsn()}: {error}. "
-                "Start it with `docker compose up -d`."
+                f"could not connect to Postgres: {error}. Start it with `docker compose up -d`."
             ) from error
         return cls(connection)
 

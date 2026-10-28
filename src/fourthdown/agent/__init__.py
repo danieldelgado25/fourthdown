@@ -1,35 +1,25 @@
-"""Tool routing: one question in, one tool's evidence out."""
+"""Tool routing: one question in, one tool's evidence out.
 
-from fourthdown.agent.assistant import Answer, Assistant
-from fourthdown.agent.build import Readiness, Services, services
-from fourthdown.agent.router import KeywordRouter, LLMRouter, Route, Router
-from fourthdown.agent.tools import (
-    AdvisorTool,
-    Evidence,
-    NarrativeTool,
-    Passage,
-    StatsTool,
-    Table,
-    TendencyTool,
-    Tool,
-)
+Everything exported here is free of heavy dependencies, so the gateway service can route
+without DuckDB, Postgres, or torch installed. Concrete tools live in `fourthdown.services`.
+"""
+
+from fourthdown.agent.assistant import Answer, Assistant, answer_json
+from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter, Route, Router
+from fourthdown.agent.tools import Evidence, Passage, Table, Tool, ToolError
 
 __all__ = [
-    "AdvisorTool",
     "Answer",
     "Assistant",
     "Evidence",
+    "HybridRouter",
     "KeywordRouter",
     "LLMRouter",
-    "NarrativeTool",
     "Passage",
-    "Readiness",
     "Route",
     "Router",
-    "Services",
-    "StatsTool",
     "Table",
-    "TendencyTool",
     "Tool",
-    "services",
+    "ToolError",
+    "answer_json",
 ]

@@ -1,33 +1,34 @@
-# `docker compose up -d` starts Postgres alone, for running the app from the host.
-# `docker compose --profile stack up -d` runs everything in containers: Ollama (and its
-# model pulls), the data pipeline, the narrative index, the API, and the dashboard.
-# One-shot services gate the long-running ones through service_completed_successfully.
+# `docker compose up -d` starts Postgres alone, for local development.
+# `docker compose --profile app up -d --build` (or `make up`) runs every service; the
+# dashboard is on http://localhost:8000. Services start in any order and heal as their
+# dependencies (Postgres, Ollama models, trained artifacts) appear.
+# Data lives in ./data: build and train on the host (`make build train`), or in containers
+# with `make pipeline` (the `pipeline` profile: download, warehouse, train, then index).
+# The chat model is any OpenAI-compatible endpoint (see fourthdown.llm.client): the bundled
+# Ollama by default, or a GPU server / hosted API by setting these three in .env. Narrative
+# embeddings always come from Ollama, so they match the index.
+x-ollama: &ollama
+  OLLAMA_HOST: http://ollama:11434
+  FOURTHDOWN_LLM_BASE_URL: ${FOURTHDOWN_LLM_BASE_URL:-http://ollama:11434/v1}
+  FOURTHDOWN_LLM_MODEL: ${FOURTHDOWN_LLM_MODEL:-qwen2.5-coder:7b}
+  FOURTHDOWN_LLM_API_KEY: ${FOURTHDOWN_LLM_API_KEY:-}
+  FOURTHDOWN_EMBED_MODEL: ${FOURTHDOWN_EMBED_MODEL:-nomic-embed-text}
+  # Generous for the bundled CPU model (~10 tok/s reading a ~2k-token SQL prompt); lower
+  # both when pointing at a GPU or hosted endpoint. The gateway allows 3 completions.
+  FOURTHDOWN_LLM_TIMEOUT: ${FOURTHDOWN_LLM_TIMEOUT:-300}
+  FOURTHDOWN_TOOL_TIMEOUT: ${FOURTHDOWN_TOOL_TIMEOUT:-960}
 
-x-app: &app
-  image: ${FOURTHDOWN_APP_IMAGE:-fourthdown-app:latest}
-  build:
-    context: .
-    dockerfile: docker/app.Dockerfile
-    args:
-      BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
-  environment: &app-env
-    FOURTHDOWN_DATA_DIR: /data
-    FOURTHDOWN_PG_DSN: postgresql://fourthdown:fourthdown@postgres:5432/fourthdown
-    OLLAMA_HOST: ${FOURTHDOWN_OLLAMA_URL:-http://ollama:11434}
-    FOURTHDOWN_LLM_MODEL: ${FOURTHDOWN_LLM_MODEL:-qwen2.5-coder:7b}
-    FOURTHDOWN_EMBED_MODEL: ${FOURTHDOWN_EMBED_MODEL:-nomic-embed-text}
-  volumes:
-    - appdata:/data
+x-dsn: &dsn postgresql://fourthdown:${POSTGRES_PASSWORD}@postgres:5432/fourthdown
 
 services:
   postgres:
-    image: ${PGVECTOR_IMAGE:-pgvector/pgvector:pg16}
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: fourthdown
-      POSTGRES_PASSWORD: fourthdown
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: fourthdown
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -37,8 +38,12 @@ services:
       retries: 10
 
   ollama:
-    profiles: ["stack"]
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.35.1}
+    profiles: [app, pipeline]
+    environment:
+      OLLAMA_CONTEXT_LENGTH: 8192   # the schema card plus repair history fits
+    ports:
+      - "127.0.0.1:11434:11434"   # so the host CLI can index and evaluate against it
     volumes:
       - ollama:/root/.ollama
     healthcheck:
@@ -47,43 +52,48 @@ services:
       timeout: 5s
       retries: 20
 
+  # One-shot: pulls the chat and embedding models into the ollama volume, then exits.
   ollama-pull:
-    profiles: ["stack"]
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.35.1}
-    environment:
-      OLLAMA_HOST: ${FOURTHDOWN_OLLAMA_URL:-http://ollama:11434}
-      LLM_MODEL: ${FOURTHDOWN_LLM_MODEL:-qwen2.5-coder:7b}
-      EMBED_MODEL: ${FOURTHDOWN_EMBED_MODEL:-nomic-embed-text}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - ollama pull "$${LLM_MODEL}" && ollama pull "$${EMBED_MODEL}"
+    profiles: [app, pipeline]
+    environment: *ollama
+    entrypoint:
+      - sh
+      - -c
+      - ollama pull "$$FOURTHDOWN_LLM_MODEL" && ollama pull "$$FOURTHDOWN_EMBED_MODEL"
     depends_on:
       ollama:
         condition: service_healthy
     restart: "no"
 
+  # One-shot: download, warehouse, and train into ./data; a no-op when ./data already
+  # holds a verified build of the same seasons and training flags (docker/pipeline.sh).
   pipeline:
-    <<: *app
-    profiles: ["stack"]
+    build: { context: ., target: pipeline }
+    profiles: [pipeline]
     environment:
-      <<: *app-env
       FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-2024}
       FOURTHDOWN_TRAIN_ARGS: ${FOURTHDOWN_TRAIN_ARGS:-}
-    command: ["fourthdown-pipeline"]
+    volumes:
+      - ./data:/data
     restart: "no"
 
+  # One-shot: embed game and postseason-drive narratives into Postgres.
   index:
-    <<: *app
-    profiles: ["stack"]
+    build: { context: ., target: pipeline }
+    profiles: [pipeline]
+    environment:
+      <<: *ollama
+      FOURTHDOWN_PG_DSN: *dsn
+      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2024}
     command:
-      - /bin/sh
+      - sh
       - -c
       - >-
         fourthdown wait --min-documents 1 --timeout 0 ||
         fourthdown index --seasons "$${FOURTHDOWN_INDEX_SEASONS}" --playoff-drives
-    environment:
-      <<: *app-env
-      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2024}
+    volumes:
+      - ./data:/data:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,44 +103,45 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
-  api:
-    <<: *app
-    profiles: ["stack"]
-    ports:
-      - "8000:8000"
-    depends_on:
-      index:
-        condition: service_completed_successfully
+  warehouse:
+    build: { context: ., target: warehouse }
+    profiles: [app]
+    environment: *ollama
+    volumes:
+      - ./data:/data:ro
 
-  web:
-    profiles: ["stack"]
-    image: ${FOURTHDOWN_WEB_IMAGE:-fourthdown-web:latest}
-    build:
-      context: .
-      dockerfile: docker/web.Dockerfile
-      args:
-        NODE_IMAGE: ${NODE_IMAGE:-node:20-alpine}
-        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27-alpine}
+  retrieval:
+    build: { context: ., target: retrieval }
+    profiles: [app]
     environment:
-      FOURTHDOWN_API_UPSTREAM: http://api:8000
-    ports:
-      - "8088:80"
+      <<: *ollama
+      FOURTHDOWN_PG_DSN: *dsn
     depends_on:
-      api:
+      postgres:
         condition: service_healthy
 
+  models:
+    build: { context: ., target: models }
+    profiles: [app]
+    volumes:
+      - ./data:/data:ro
+
+  gateway:
+    build: { context: ., target: gateway }
+    profiles: [app]
+    environment:
+      <<: *ollama
+      FOURTHDOWN_SERVICES: http://warehouse:8001,http://retrieval:8002,http://models:8003
+    ports:
+      - "8000:8000"
+
+  # The provenance-checked win-probability image (`make wp-image` after training).
   winprob:
-    profiles: ["winprob", "stack"]
-    build:
-      context: .
-      dockerfile: docker/winprob.Dockerfile
-      args:
-        BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
     image: fourthdown-winprob:latest
+    profiles: [winprob]
     ports:
       - "8080:8080"
 
 volumes:
   pgdata:
-  appdata:
   ollama:

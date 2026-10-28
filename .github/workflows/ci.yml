@@ -8,6 +8,8 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      FOURTHDOWN_PG_DSN: postgresql://fourthdown:fourthdown@localhost:5432/fourthdown
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -135,26 +137,30 @@ jobs:
           version: v3.19.0
       - name: Lint the chart
         run: make helm-lint
-      - name: Build the app and dashboard images
-        run: make app-image web-image
+      - name: Build the service and pipeline images
+        run: make images
       - uses: helm/kind-action@v1
         with:
           cluster_name: fourthdown
           config: deploy/kind/cluster.yaml
       - name: Load the images into kind
-        run: kind load docker-image --name fourthdown fourthdown-app:latest fourthdown-web:latest
-      - name: Install the chart (pipeline Job, Postgres, API, dashboard)
+        run: >-
+          kind load docker-image --name fourthdown
+          fourthdown-gateway:latest fourthdown-warehouse:latest fourthdown-retrieval:latest
+          fourthdown-models:latest fourthdown-pipeline:latest
+      - name: Install the chart (pipeline Job, Postgres, gateway and tool services)
         run: >-
           helm install fourthdown deploy/helm/fourthdown
           -f deploy/helm/fourthdown/values-kind.yaml -f deploy/helm/fourthdown/values-ci.yaml
-          --wait --timeout 25m
-      - name: helm test (health and advice through the dashboard's /api proxy)
+          --set postgres.password=ci --wait --timeout 25m
+      - name: helm test (health, advice, and routing through the gateway)
         run: helm test fourthdown --logs
       - name: Reach the dashboard through the kind port mapping
         run: |
           curl -sf localhost:8088/ | grep -q '<div id="root">'
           curl -sf localhost:8088/api/health | tee health.json
           python3 -c "import json; h = json.load(open('health.json')); assert h['warehouse'] and h['models'], h"
+          curl -sf "localhost:8088/api/tendencies?season=2024" | grep -q '"rows": *\[\['
       - name: Cluster state
         if: failure()
         run: |

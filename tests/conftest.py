@@ -150,13 +150,13 @@ def _test_dsn() -> str:
 def store() -> Iterator[DocumentStore]:
     """An empty pgvector store, or a skip when no server is reachable."""
     try:
-        with psycopg.connect(dsn(), autocommit=True) as admin:
+        with psycopg.connect(dsn(), autocommit=True, connect_timeout=10) as admin:
             exists = admin.execute(
                 "SELECT 1 FROM pg_database WHERE datname = %s", (TEST_DATABASE,)
             ).fetchone()
             if not exists:
                 admin.execute(f'CREATE DATABASE "{TEST_DATABASE}"')
-    except psycopg.Error as error:
+    except (psycopg.Error, StoreError) as error:
         pytest.skip(f"no Postgres available: {error}")
     try:
         opened = DocumentStore.open(_test_dsn())

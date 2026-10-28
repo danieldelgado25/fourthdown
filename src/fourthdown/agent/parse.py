@@ -9,9 +9,12 @@ it rather than guessing.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
-from fourthdown.models.winprob import GameState
 from fourthdown.narrative.teams import TEAM_NAMES
+
+if TYPE_CHECKING:
+    from fourthdown.models.winprob import GameState
 
 DEFAULT_SEASON = 2024
 DEFAULT_MINUTES = 15.0
@@ -90,6 +93,9 @@ def parse_state(question: str) -> GameState | None:
     the score have defensible defaults (a tied game in the fourth quarter) and the
     caller sees what was assumed in the rendered situation line.
     """
+    # Imported here so season and team parsing stay usable without torch installed.
+    from fourthdown.models.winprob import GameState
+
     togo = _TOGO.search(question)
     yardline = _YARDLINE.search(question)
     if togo is None or yardline is None:

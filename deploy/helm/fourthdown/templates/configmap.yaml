@@ -6,8 +6,17 @@ metadata:
     {{- include "fourthdown.labels" . | nindent 4 }}
 data:
   FOURTHDOWN_DATA_DIR: /data
-  OLLAMA_HOST: {{ include "fourthdown.ollamaUrl" . | quote }}
+  {{- with include "fourthdown.ollamaUrl" . }}
+  OLLAMA_HOST: {{ . | quote }}
+  {{- end }}
+  {{- with include "fourthdown.llmBaseUrl" . }}
+  FOURTHDOWN_LLM_BASE_URL: {{ . | quote }}
+  {{- end }}
   FOURTHDOWN_LLM_MODEL: {{ .Values.llm.model | quote }}
   FOURTHDOWN_EMBED_MODEL: {{ .Values.llm.embedModel | quote }}
+  FOURTHDOWN_LLM_TIMEOUT: {{ .Values.llm.timeoutSeconds | quote }}
+  FOURTHDOWN_TOOL_TIMEOUT: {{ .Values.llm.toolTimeoutSeconds | quote }}
+  FOURTHDOWN_THREADS: {{ .Values.threads | quote }}
+  FOURTHDOWN_SERVICES: {{ include "fourthdown.serviceUrls" . | quote }}
   FOURTHDOWN_SEASONS: {{ .Values.pipeline.seasons | quote }}
   FOURTHDOWN_TRAIN_ARGS: {{ .Values.pipeline.trainArgs | quote }}

@@ -220,9 +220,39 @@ no narrative tool; no artifacts means no advisor; no Ollama means keyword routin
 SQL authoring. `/api/health` reports the state and the reason, and the dashboard disables
 what it cannot reach — a fresh clone with nothing built still starts and explains itself.
 
-Services are held for the process lifetime, so in a container each gunicorn worker opens
-its own: DuckDB allows any number of read-only connections across processes, and the
-models are a few megabytes. The win-probability model also has its own container (below).
+Each service holds its own DuckDB connection, Postgres connection, or torch model for the
+process lifetime and answers on `FOURTHDOWN_THREADS` waitress threads (default 4), so a
+slow LLM-backed answer does not queue fast ones; capacity beyond that comes from replicas.
+
+## Services (phase 07)
+
+```
+                     ┌─► warehouse :8001 ── DuckDB (read-only) ─────┐
+browser ──► gateway ─┼─► retrieval :8002 ── Postgres + pgvector ────┼─► Ollama
+            :8000  │ └─► models    :8003 ── torch artifacts         │
+                   └────────────────────────────────────────────────┘ (routing)
+```
+
+**Split by backing store.** Each service owns exactly one store and the tools that read
+it, so each has one reason to fail and one set of heavy dependencies. The gateway owns
+nothing: it routes, forwards, and serves the dashboard, and its image has no DuckDB,
+psycopg, or torch. `tests/test_service_isolation.py` imports each service in a fresh
+interpreter and fails if it loads another service's dependencies.
+
+**Discovery, not configuration.** Tool services publish their catalog on `/health` --
+names and the descriptions the router reads -- and the gateway polls it (cached for 15
+seconds). A service that is down contributes no tools, so the router never picks one that
+cannot run; one that disappears mid-request yields a failed answer naming it, not a 500.
+
+**Start in any order, heal in place.** A service that comes up without its store reports
+what is missing and retries every 30 seconds. Postgres arriving late, a model finishing
+its download, or `fourthdown train` writing artifacts all heal a running deployment
+without a restart.
+
+**One contract.** `/health` (200 with tools loaded, 503 without, so it is also the
+readiness probe) and `POST /tools/<name>` returning the `Evidence` envelope. The
+structured endpoints the dashboard uses, `/advise` and `/tendencies`, are proxied by the
+gateway to whichever service owns `advisor` and `tendency`.
 
 ## Evaluation in CI (phase 06)
 
@@ -245,16 +275,17 @@ enough to look fine.
 | references: every golden reference query runs on the warehouse | warehouse | every PR |
 | models: retrain all three models from scratch and score them | warehouse | every PR |
 | text_to_sql, routing_llm | Ollama with `qwen2.5-coder:7b` | weekly, on demand, or with the `eval-llm` PR label |
-| retrieval | Postgres index and `nomic-embed-text` | locally (`make scorecard`) |
+| retrieval | the full Postgres index and `nomic-embed-text` | weekly and on demand, beside the LLM suites |
 
 On every PR the models are retrained rather than loaded from checked-in artifacts. That
 checks the pipeline still produces a good model, not that an old file is still on disk.
 A suite that cannot run is skipped with a reason. CI passes `--require` for the suites it
 expects, so a missing dependency fails the job instead of being reported as a pass.
 
-Retrieval is kept out of CI on purpose. Indexing only the games the golden set asks
-about would make search much easier than against the full index. CI would then report
-inflated hit@1 for a smaller corpus, and that number would be misleading.
+Retrieval runs against the full index, every game and every postseason drive. Indexing
+only the games the golden set asks about would make search much easier than against the
+real corpus and report an inflated hit@1, so the job embeds all ~8.5k narratives first,
+which is why it is weekly rather than per-PR.
 
 **The guard suite found real bypasses.** Before this phase the guard checked table names
 against the allowed views, but it had no rule for table functions. A query could read a
@@ -306,44 +337,49 @@ the source files.
 
 ## Containers and Kubernetes (phase 07b)
 
-Three images, none of which hold data (`docker/`):
+One Dockerfile with a target per service (`make images`), plus the model image. None of
+the service images hold data, and each installs only its own pip extra, pinned by
+`docker/constraints.txt`:
 
 | image | contents | runs as |
 | --- | --- | --- |
-| `fourthdown-app` | the package, CPU torch, gunicorn, pinned by `docker/constraints.txt` | the API, the pipeline Job, the index Job, `fourthdown wait` |
-| `fourthdown-web` | the Vite build behind nginx, which proxies `/api` to the API | the dashboard |
+| `fourthdown-gateway` | routing, Flask, waitress, the built dashboard | the public API and the dashboard |
+| `fourthdown-warehouse` | + DuckDB, sqlglot | stats, tendency |
+| `fourthdown-retrieval` | + psycopg | narrative |
+| `fourthdown-models` | + CPU torch, scikit-learn | advisor |
+| `fourthdown-pipeline` | every extra, typer, MLflow | the pipeline Job, the index Job, `fourthdown wait` |
 | `fourthdown-winprob` | one trained model and its card (above) | the standalone model service |
 
-**Data is built where it is served.** The DuckDB views store the absolute path of the
-Parquet partitions, so a warehouse built on a laptop cannot simply be copied into a
-volume. Instead `docker/pipeline.sh` runs `fourthdown build` and `fourthdown train`
-against the volume mounted at `/data`, and skips both when the volume already holds a
-build of the same configuration that passes `fourthdown lineage --verify`. The provenance
-checks therefore run inside the cluster too.
+**Data is built where it is served.** `docker/pipeline.sh` runs `fourthdown build` and
+`fourthdown train` against the volume mounted at `/data`, and skips both when the volume
+already holds a build of the same configuration that passes `fourthdown lineage --verify`.
+The provenance checks therefore run inside the cluster too. In Compose the volume is the
+repo's `data/`, so a build on the host (`make build train`) serves just as well.
 
-**Ordering is explicit.** Compose gates services on `service_completed_successfully`.
-Kubernetes has no equivalent between a Job and a Deployment, so pods run
-`fourthdown wait` as an init container. It polls for the warehouse and the model card,
-for the Ollama models, and for a non-empty narrative index, and on timeout it reports
-which check failed. The API needs this because it opens its services once at startup: a
-pod that started before the index was built would never pick up the narrative tool.
+**Ordering is mostly unnecessary.** The services heal in place (above), so they start
+alongside the pipeline Job and turn ready as the warehouse and models appear. Only the
+index Job needs ordering: it runs `fourthdown wait` as an init container, polling for the
+warehouse, Postgres, and the embedding model, and on timeout reports which check failed.
 
 **Jobs are named by their inputs.** A Job's spec is immutable, so the pipeline, index,
 and model-pull Jobs carry a hash of their inputs: seasons, training flags, and image for
 the pipeline; seasons, embedding model, and pipeline for the index. Changing an input
-creates a new Job, and an unchanged upgrade is a no-op. The API pod template is annotated
-with the pipeline Job's name, so a rebuild rolls the API.
+creates a new Job, and an unchanged upgrade is a no-op. A service reopens only what is
+missing, so the warehouse and models pods are annotated with the pipeline Job's name and
+a rebuild rolls them.
 
 **Sized for a laptop.** Requests total under one CPU, so the chart schedules on a 2-CPU
 kind node beside the control plane, and limits leave room for the 7B model. The data
 volume is ReadWriteOnce, which is enough when every pod runs on one node; a multi-node
-cluster needs ReadWriteMany. While the API holds read-only DuckDB connections, a pipeline
-Job cannot rewrite the warehouse, so a rebuild with different seasons needs the API scaled
-to zero first.
+cluster needs ReadWriteMany. While the warehouse service holds read-only DuckDB
+connections, a pipeline Job cannot rewrite the warehouse, so a rebuild with different
+seasons needs it scaled to zero first.
 
-CI installs the chart on kind with three seasons, no Ollama, and no model image
-(`values-ci.yaml`). It then runs `helm test`, which checks health and fourth-down advice
-through the dashboard's proxy, and reaches the dashboard through the kind port mapping.
+CI installs the chart on kind with three seasons, no Ollama, no retrieval service, and no
+model image (`values-ci.yaml`). It then runs `helm test`, which checks health, fourth-down
+advice, and keyword routing through the gateway, and reaches the dashboard through the
+kind port mapping.
+
 
 ## Phase status
 
@@ -358,3 +394,4 @@ through the dashboard's proxy, and reaches the dashboard through the kind port m
 | 06 | evaluation harness in CI | done |
 | 07a | provenance, MLflow tracking, containerized win-probability API | done |
 | 07b | full stack in Docker Compose, Helm chart on a local kind cluster | done |
+| 07c | gateway and tool services, provider-agnostic LLM, hybrid routing | done |

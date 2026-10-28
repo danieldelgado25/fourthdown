@@ -13,13 +13,18 @@ import logging
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-
-import duckdb
+from typing import Any
 
 from fourthdown.agent.router import Route, Router
-from fourthdown.agent.tools import Evidence, Passage, Table, Tool
-from fourthdown.llm import LLMError
-from fourthdown.retrieval.store import StoreError
+from fourthdown.agent.tools import (
+    Evidence,
+    Passage,
+    Table,
+    Tool,
+    ToolError,
+    passage_json,
+    table_json,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,6 +97,29 @@ class Assistant:
         """
         try:
             return self._tools[name].run(question)
-        except (LLMError, StoreError, duckdb.Error) as error:
+        except ToolError as error:
             LOGGER.exception("%s failed", name)
             return Evidence(answer=f"The {name} tool failed: {error}", failed=True)
+
+
+def answer_json(answer: Answer) -> dict[str, Any]:
+    """Serialise an `Answer` into the public ``/api/ask`` response body.
+
+    Args:
+        answer: The routed, evidenced answer.
+
+    Returns:
+        The dict the dashboard's `AnswerData` type describes: the evidence fields plus the
+        question, the tool, the route that chose it, and the elapsed time.
+    """
+    return {
+        "question": answer.question,
+        "tool": answer.tool,
+        "route": {"reason": answer.route_reason, "decided_by": answer.decided_by},
+        "answer": answer.answer,
+        "table": table_json(answer.table),
+        "passages": [passage_json(passage) for passage in answer.passages],
+        "detail": answer.detail,
+        "failed": answer.failed,
+        "elapsed_seconds": round(answer.elapsed_seconds, 3),
+    }

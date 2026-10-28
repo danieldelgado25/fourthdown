@@ -6,6 +6,11 @@ pipeline:
   trainArgs: "--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024 --epochs 5 --audit-sample 200"
 ollama:
   enabled: false
+# Without an LLM the retrieval service loads no tools and never turns ready, which would
+# hold `helm install --wait`; the gateway simply routes without the narrative tool.
+services:
+  retrieval:
+    replicas: 0
 winprob:
   enabled: false
 data:

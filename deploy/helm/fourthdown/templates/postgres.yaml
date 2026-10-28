@@ -1,3 +1,4 @@
+{{- if .Values.postgres.enabled }}
 {{- $name := printf "%s-postgres" (include "fourthdown.fullname" .) -}}
 apiVersion: v1
 kind: Service
@@ -42,7 +43,7 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "fourthdown.postgresSecret" . }}
+                  name: {{ include "fourthdown.secret" . }}
                   key: password
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
@@ -74,3 +75,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.postgres.storage }}
+{{- end }}

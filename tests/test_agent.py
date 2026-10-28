@@ -5,10 +5,11 @@ from conftest import ScriptedClient
 
 from fourthdown.agent.assistant import Assistant
 from fourthdown.agent.parse import parse_season, parse_state, parse_team
-from fourthdown.agent.router import KeywordRouter, LLMRouter
-from fourthdown.agent.tools import Evidence, Table, TendencyTool
+from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter
+from fourthdown.agent.tools import Evidence, Table, ToolError
 from fourthdown.evaluation import routing_harness
 from fourthdown.llm import LLMError
+from fourthdown.services.warehouse import TendencyTool
 
 
 class RecordingTool:
@@ -28,7 +29,7 @@ class ExplodingTool:
     description = "raises"
 
     def run(self, question: str) -> Evidence:
-        raise LLMError("ollama is not running")
+        raise ToolError("ollama is not running")
 
 
 @pytest.fixture()
@@ -84,6 +85,19 @@ class FailingClient:
 def test_llm_router_falls_back_when_the_model_is_unreachable(tools):
     route = LLMRouter(tools, FailingClient()).route("how many sacks in 2020")
     assert (route.tool, route.decided_by) == ("stats", "keyword")
+
+
+def test_hybrid_router_answers_cued_questions_without_the_model(tools):
+    client = ScriptedClient()
+    route = HybridRouter(tools, client).route("4th and 2 from the 38, go for it?")
+    assert (route.tool, route.decided_by) == ("advisor", "keyword")
+    assert client.prompts == []
+
+
+def test_hybrid_router_asks_the_model_when_there_is_no_cue(tools):
+    client = ScriptedClient("narrative")
+    route = HybridRouter(tools, client).route("How did the Colts blow their lead in 2022?")
+    assert (route.tool, route.decided_by) == ("narrative", "llm")
 
 
 def test_assistant_runs_the_routed_tool(tools):

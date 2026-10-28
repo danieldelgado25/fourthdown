@@ -1,5 +1,6 @@
 {{- if include "fourthdown.indexEnabled" . }}
 {{- $inputs := printf "%s|%s|%s" .Values.index.seasons .Values.llm.embedModel (include "fourthdown.pipelineJob" .) }}
+{{- $image := include "fourthdown.appImage" (dict "root" . "target" "pipeline") }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -17,31 +18,31 @@ spec:
       {{- include "fourthdown.appSecurity" . | nindent 6 }}
       initContainers:
         - name: wait
-          image: {{ include "fourthdown.image" .Values.images.app }}
-          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           command: ["fourthdown", "wait", "--data", "--postgres",
                     "--ollama-models", {{ .Values.llm.embedModel | quote }},
-                    "--timeout", {{ .Values.api.waitTimeoutSeconds | quote }}]
+                    "--timeout", {{ .Values.index.waitTimeoutSeconds | quote }}]
           envFrom:
             - configMapRef:
                 name: {{ include "fourthdown.fullname" . }}
           env:
-            {{- include "fourthdown.appEnv" . | nindent 12 }}
+            {{- include "fourthdown.secretEnv" . | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /data
               readOnly: true
       containers:
         - name: index
-          image: {{ include "fourthdown.image" .Values.images.app }}
-          imagePullPolicy: {{ .Values.images.app.pullPolicy }}
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
           command: ["fourthdown", "index", "--seasons", {{ .Values.index.seasons | quote }},
                     "--playoff-drives"]
           envFrom:
             - configMapRef:
                 name: {{ include "fourthdown.fullname" . }}
           env:
-            {{- include "fourthdown.appEnv" . | nindent 12 }}
+            {{- include "fourthdown.secretEnv" . | nindent 12 }}
           resources:
             {{- toYaml .Values.index.resources | nindent 12 }}
           volumeMounts:

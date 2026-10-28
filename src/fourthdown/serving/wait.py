@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 import psycopg
 
 from fourthdown.config import Paths
-from fourthdown.llm import OllamaClient
+from fourthdown.llm import ChatClient
 from fourthdown.models.card import MODEL_CARD
 from fourthdown.retrieval import DocumentStore
 from fourthdown.retrieval.store import StoreError
@@ -36,11 +36,11 @@ def data_check(paths: Paths) -> Check:
     return check
 
 
-def ollama_check(model: str, host: str | None = None) -> Check:
-    client = OllamaClient(model, host=host)
+def ollama_check(model: str, base_url: str | None = None) -> Check:
+    client = ChatClient(model, base_url=base_url)
 
     def check() -> str | None:
-        return None if client.available() else f"Ollama at {client.host} has no {model}"
+        return None if client.available() else f"LLM at {client.base_url} has no {model}"
 
     return check
 

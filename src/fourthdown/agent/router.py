@@ -1,6 +1,6 @@
 """Pick the tool that should answer a question.
 
-Two routers, and the difference is the point of the module.
+Three routers, and the difference is the point of the module.
 
 `KeywordRouter` is rules over the question text. It is fast, free, deterministic, and
 gets the obvious cases right; it is also the fallback, so the system degrades to
@@ -11,6 +11,11 @@ It handles the phrasings no rule anticipated, and when it answers with something
 not a tool name -- which a 7B model does -- the keyword router takes over. Routing
 accuracy for both is measured on a golden set (`docs/routing_eval.md`), which is the
 only honest way to claim the LLM is worth the round trip.
+
+`HybridRouter` is what serves: keyword rules when the question carries a clear cue (a
+fourth-down situation, "what happened", tendency phrasing), the model only when it does
+not. The two make different mistakes on the golden set, and a model call is the slowest
+step of a fourth-down answer, so cues decide for free and the model handles the rest.
 """
 
 from __future__ import annotations
@@ -88,7 +93,8 @@ class KeywordRouter:
             raise ValueError("a router needs at least one tool to route to")
         self._default = "stats" if "stats" in self._names else sorted(self._names)[0]
 
-    def route(self, question: str) -> Route:
+    def match(self, question: str) -> Route | None:
+        """The route a keyword cue implies, or ``None`` when no loaded tool's cue matches."""
         for name, patterns in (
             ("advisor", ADVISOR_PATTERNS),
             ("tendency", TENDENCY_PATTERNS),
@@ -97,6 +103,13 @@ class KeywordRouter:
             pattern = _matches(question, patterns)
             if pattern is not None and name in self._names:
                 return Route(tool=name, reason=f"matched /{pattern}/", decided_by="keyword")
+        return None
+
+    def route(self, question: str) -> Route:
+        """The cue's route, or the statistics default when nothing matches."""
+        matched = self.match(question)
+        if matched is not None:
+            return matched
         return Route(
             tool=self._default,
             reason="no narrative or decision cue; treated as a statistics question",
@@ -132,6 +145,27 @@ class LLMRouter:
             LOGGER.info("router replied %r, which is not a tool; falling back", reply.strip()[:60])
             return self._fallback.route(question)
         return Route(tool=chosen, reason=f"model chose {chosen}", decided_by="llm")
+
+
+class HybridRouter:
+    """Keyword cues first; the model only for questions without one.
+
+    Args:
+        tools: The loaded tools.
+        client: The LLM consulted for cue-less questions.
+
+    `route(question)` returns a keyword `Route` when a cue matches, otherwise the LLM
+    router's choice -- which itself falls back to keywords if the model is unreachable or
+    answers with something that is not a tool name.
+    """
+
+    def __init__(self, tools: Sequence[Tool], client: LLMClient) -> None:
+        self._keywords = KeywordRouter(tools)
+        self._llm = LLMRouter(tools, client)
+
+    def route(self, question: str) -> Route:
+        """Route ``question``; see the class docstring."""
+        return self._keywords.match(question) or self._llm.route(question)
 
 
 def _first_tool_name(reply: str, names: set[str]) -> str | None:

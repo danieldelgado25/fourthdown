@@ -1,14 +1,15 @@
+# Allowlist: only what the images copy. Keeps .env, data/, and node_modules out of the
+# build context; the winprob image is the one that bakes in a trained model.
 *
 !pyproject.toml
 !README.md
 !src/
-!docker/winprob-requirements.txt
-!docker/constraints.txt
-!docker/pipeline.sh
-!docker/nginx.conf.template
-!data/models/winprob.pt
-!data/models/model_card.json
 !web/
 web/node_modules
 web/dist
+!docker/constraints.txt
+!docker/pipeline.sh
+!docker/winprob-requirements.txt
+!data/models/winprob.pt
+!data/models/model_card.json
 **/__pycache__

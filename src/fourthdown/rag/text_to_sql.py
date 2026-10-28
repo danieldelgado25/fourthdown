@@ -220,9 +220,11 @@ class TextToSQL:
         return extract_sql(response)
 
     def _execute(self, sql: str) -> tuple[tuple[str, ...], list[tuple[object, ...]]]:
-        cursor = self._connection.execute(sql)
-        columns = tuple(description[0] for description in cursor.description or ())
-        return columns, cursor.fetchall()
+        # A cursor per query: DuckDB connections are not safe to share across threads.
+        with self._connection.cursor() as cursor:
+            cursor.execute(sql)
+            columns = tuple(description[0] for description in cursor.description or ())
+            return columns, cursor.fetchall()
 
     def answer(self, question: str) -> SQLAnswer:
         started = time.perf_counter()

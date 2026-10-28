@@ -6,11 +6,12 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 05 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
+**Status: phase 07 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
 text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
-models (win probability, the fourth-down advisor, run/pass play call), and the serving
-layer: a tool-routing orchestrator behind a Flask API and a React dashboard. Remaining
-phases are listed in [docs/architecture.md](docs/architecture.md).
+models (win probability, the fourth-down advisor, run/pass play call), a tool-routing
+gateway with a React dashboard over four independently deployable services, gated
+evaluation in CI, and Docker Compose and Helm deployments. Design notes and phase history
+are in [docs/architecture.md](docs/architecture.md).
 
 ## Quickstart
 
@@ -68,7 +69,8 @@ rendered into deterministic English — one document per game, one per drive —
 embedded with Ollama and stored in Postgres with pgvector:
 
 ```bash
-docker compose up -d                         # pgvector/pgvector:pg16 on :5432
+cp .env.example .env                         # pick a password; export FOURTHDOWN_PG_DSN to match
+docker compose up -d                         # pgvector/pgvector:pg16 on 127.0.0.1:5432
 ollama pull nomic-embed-text
 fourthdown index --seasons 2009- --playoff-drives    # ~8.6k documents
 fourthdown recall "the comeback from 28-3"           # passages + provenance
@@ -166,7 +168,7 @@ citations, or the win-probability value of every fourth-down option.
 
 ```bash
 fourthdown chat "should they go for it on 4th and 2 from the 38, down 3 with 4 minutes left?"
-make serve                                   # Flask on :8000
+make up                                      # every service in Docker; dashboard on :8000
 make web-install && make web                 # Vite dev server on :5173, proxying /api
 make eval-routing                            # -> docs/routing_eval.md
 ```
@@ -180,7 +182,8 @@ keeping the cheap one as the fallback.
 Every dependency is optional at startup. Missing Postgres drops the narrative tool,
 missing model artifacts drop the advisor, missing Ollama drops LLM routing — the API
 reports what is loaded on `/api/health` and the dashboard greys out what it cannot do,
-rather than erroring on first use.
+rather than erroring on first use. Services retry what is missing every 30 seconds, so
+pulling a model or finishing `fourthdown train` heals a running deployment.
 
 | endpoint | purpose |
 | --- | --- |
@@ -189,8 +192,74 @@ rather than erroring on first use.
 | `POST /api/advise` | fourth-down state in, ranked go / field goal / punt out |
 | `GET /api/tendencies` | neutral-script pass rate and EPA by team for a season |
 
-The services (DuckDB connection, pgvector pool, torch checkpoint) are opened once and
-held read-only for the life of the process, which makes the app single-worker by design.
+### Services
+
+The app runs as four independently deployable services. Each owns one backing store, ships
+as its own image with only its own dependencies, and can fail, restart, or scale without
+the others:
+
+| service | port | owns | image carries |
+| --- | --- | --- | --- |
+| gateway | 8000 | routing, the public `/api/*`, the dashboard | Flask, requests |
+| warehouse | 8001 | `stats` (text-to-SQL), `tendency` | + DuckDB, sqlglot |
+| retrieval | 8002 | `narrative` | + psycopg |
+| models | 8003 | `advisor` | + torch, scikit-learn |
+
+Tool services share one contract: `GET /health` lists the tools they have loaded (with
+the descriptions the router reads) and `POST /tools/<name>` runs one. The gateway
+discovers tools by polling `/health` and imports none of the services' code, so adding a
+tool means deploying a service, not editing the gateway. A test fails the build if any
+service starts importing another's dependencies.
+
+`fourthdown chat` builds the same tools in-process, so the CLI needs no running services.
+
+### Running it in Docker
+
+The services mount `data/` read-only, so build and train first, either on the host or in
+containers:
+
+```bash
+cp .env.example .env                         # set POSTGRES_PASSWORD
+make build train index                       # data/ on the host, or:
+make pipeline                                # download, build, train, and index in containers
+make up                                      # postgres, ollama, and the four services
+```
+
+The dashboard is on http://localhost:8000. A one-shot `ollama-pull` container fetches the
+chat and embedding models into a volume; the services pick them up when the download
+finishes. `make pipeline` is a no-op when `data/` already holds a verified build of the
+same `FOURTHDOWN_SEASONS` and `FOURTHDOWN_TRAIN_ARGS`. Without Docker, run each service
+with `make serve-warehouse`, `serve-retrieval`, `serve-models`, and `serve-gateway`.
+
+The warehouse stores its Parquet glob relative to the data root, so the same
+`fourthdown.duckdb` opens on the host and at `/data` in a container. Warehouses built
+before that change need one `fourthdown warehouse` to pick it up.
+
+### Running it on Kubernetes
+
+`deploy/helm/fourthdown` runs the four services as Deployments, Postgres and Ollama as
+StatefulSets, and the pipeline, model-pull, and index steps as Jobs that build the data
+into a shared volume. Each has probes and resource limits sized for a laptop. Readiness
+probes use each service's `/health`, so a pod is only sent traffic once it has tools
+loaded, and the services turn ready as the pipeline Job finishes. Locally, on a
+single-node [kind](https://kind.sigs.k8s.io) cluster:
+
+```bash
+make kind-up                      # one-node cluster; host 8088 -> dashboard, 8089 -> winprob
+make kind-load                    # build every image; kind cannot pull local ones
+make k8s-deploy                   # helm upgrade --install with values-kind.yaml
+kubectl get jobs,pods -w          # services report degraded until data and models exist
+make k8s-test                     # helm test: health, advice, routing, a win probability
+make kind-down
+```
+
+`POSTGRES_PASSWORD` comes from `.env`. `HELM_ARGS="--set pipeline.seasons=2022-2024
+--set llm.model=qwen2.5-coder:1.5b"` makes a quick, small cluster. Postgres and Ollama
+can be external (`postgres.enabled=false` with `postgres.externalDsn`,
+`ollama.enabled=false` with `ollama.externalUrl`), and `llm.baseUrl` / `llm.apiKey` point
+the chat model at any OpenAI-compatible endpoint. With no LLM at all, the chart skips the
+index and the gateway routes by keywords. Design notes are in
+[docs/architecture.md](docs/architecture.md#containers-and-kubernetes-phase-07b).
 
 ## Evaluation
 
@@ -207,47 +276,8 @@ warehouse and runs the SQL guard against 36 adversarial queries. It also scores 
 routing, runs every golden reference query, and retrains all three models from scratch.
 The scorecard is published to the job summary. Text-to-SQL and LLM routing run in
 [eval-llm.yml](.github/workflows/eval-llm.yml) weekly, on demand, or on PRs labelled
-`eval-llm`. Retrieval is scored locally against the full index. Design notes are in
+`eval-llm`. Retrieval is scored there too, weekly, against the full index. Design notes are in
 [docs/architecture.md](docs/architecture.md#evaluation-in-ci-phase-06).
-
-## Running it in containers
-
-Everything below builds its data inside a volume. Nothing on the host is mounted, and the
-pipeline runs the same provenance checks there as it does locally.
-
-**Docker Compose** brings up the whole stack: Postgres, Ollama, a model pull, the
-pipeline, the narrative index, the API, the dashboard, and the win-probability service.
-
-```bash
-make images                       # fourthdown-app, fourthdown-web, fourthdown-winprob
-make stack-up                     # dashboard on http://localhost:8088, API on :8000
-docker compose logs -f pipeline   # first run: download, build, and train 2009-2024
-```
-
-`FOURTHDOWN_OLLAMA_URL=http://host.docker.internal:11434` uses an Ollama already running
-on the host instead of the bundled one. `FOURTHDOWN_SEASONS`, `FOURTHDOWN_TRAIN_ARGS`,
-and `FOURTHDOWN_LLM_MODEL` size the build. Plain `docker compose up -d` still starts just
-Postgres for local development.
-
-**Kubernetes (kind + Helm).** The chart in `deploy/helm/fourthdown` runs the same pieces:
-Postgres and Ollama as StatefulSets, the pipeline, model-pull, and index steps as Jobs,
-and the API, dashboard, and model service as Deployments. Each has probes and resource
-limits sized for a laptop.
-
-```bash
-make kind-up                      # one-node cluster; host 8088 -> dashboard, 8089 -> winprob
-make images kind-load             # kind cannot pull local images, so load them
-make k8s-deploy                   # helm upgrade --install with values-kind.yaml
-kubectl get jobs,pods -w          # API pods wait in init until data, models, and index exist
-make k8s-test                     # helm test: health, advice, and a win probability
-```
-
-`HELM_ARGS="--set pipeline.seasons=2022-2024 --set llm.model=qwen2.5-coder:1.5b"` makes a
-quick, small cluster. `--set ollama.enabled=false --set ollama.externalUrl=http://...`
-uses an existing Ollama, and `--set postgres.existingSecret=<name>` takes the database
-password from your own Secret. With Ollama disabled and no URL, the chart skips the index
-and the API falls back to keyword routing. Design notes are in
-[docs/architecture.md](docs/architecture.md#containers-and-kubernetes-phase-07b).
 
 ## Layout
 
@@ -299,12 +329,16 @@ src/fourthdown/
     scorecard.py           gates, pass/fail verdicts, Markdown and JSON output
     gates.json             the bound on every gated metric and the reason for it
   agent/
-    tools.py          stats / narrative / advisor / tendency behind one Tool protocol
+    tools.py          the Tool protocol and the Evidence envelope, and their wire format
     parse.py          question -> season, team, and fourth-down game state
     router.py         LLM tool choice with a keyword router as the fallback
     assistant.py      route, run, and return structured evidence
-    build.py          open what is available, report what is not
-  api/app.py          Flask factory over one long-lived Services
+  services/
+    common.py         the tool-service contract: /health, /tools/<name>, self-healing
+    gateway.py        tool discovery, routing, the public API, and the dashboard
+    warehouse.py      stats and tendency tools over DuckDB
+    retrieval.py      the narrative tool over pgvector
+    models.py         the advisor tool and /advise over the trained models
 web/
   src/api.ts          the typed wire format
   src/App.tsx         readiness bar and the three panels
@@ -319,12 +353,11 @@ docs/
   routing_eval.md     generated: routing accuracy, keyword vs LLM
   scorecard.md        generated: every suite against its gates
   lineage.md          generated: data version, per-table sources and hashes
+Dockerfile            one target per service, plus `pipeline` for the build/index jobs
 docker/
   winprob.Dockerfile  CPU-only image with the trained model and its card baked in
-  app.Dockerfile      the package and CLI under gunicorn: API, pipeline, and index jobs
-  web.Dockerfile      the dashboard build behind nginx, proxying /api to the API
   pipeline.sh         build + train into the data volume, skipped when already current
-  constraints.txt     pinned runtime versions for the app image (`make constraints`)
+  constraints.txt     pinned runtime versions for every image (`make constraints`)
 deploy/
   helm/fourthdown/    the chart; values-kind.yaml for a local cluster, values-ci.yaml for CI
   kind/cluster.yaml   one node, host ports 8088 (dashboard) and 8089 (winprob)
@@ -347,7 +380,7 @@ Data is gitignored. `make build` reproduces it.
 ## Development
 
 ```bash
-make lint typecheck test     # ruff, mypy, pytest
+make lint typecheck test     # ruff, mypy, pytest (keyword routing is gated in CI too)
 make web-test                # tsc, vite build, vitest
 ```
 

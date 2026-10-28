@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
+import os
+from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from fourthdown.agent import build as agent_build
-from fourthdown.agent.router import KeywordRouter, LLMRouter
-from fourthdown.api import create_app
+from fourthdown.agent.assistant import Assistant
+from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter
+from fourthdown.agent.tools import Tool
 from fourthdown.config import data_paths
 from fourthdown.data import audit, etl, ingest, provenance, warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness, scorecard, suites
-from fourthdown.llm import LLMError, OllamaClient, default_client
+from fourthdown.llm import LLMError, default_client
 from fourthdown.models import fourth_down, tracking, winprob
 from fourthdown.models import train as training
 from fourthdown.models.card import MODEL_CARD, ModelCard
@@ -26,6 +29,9 @@ from fourthdown.narrative.render import GRAINS
 from fourthdown.rag import schema_card
 from fourthdown.rag.text_to_sql import TextToSQL
 from fourthdown.retrieval import DocumentStore, Retriever, default_embedder, index, recall
+from fourthdown.services import models as models_service
+from fourthdown.services import retrieval as retrieval_service
+from fourthdown.services import warehouse as warehouse_service
 from fourthdown.serving import wait as readiness
 from fourthdown.serving import winprob as wp_service
 
@@ -39,6 +45,30 @@ def _latest_season() -> int:
     """Seasons are named by their September start, so the current year counts from March."""
     now = datetime.now()
     return now.year if now.month >= 3 else now.year - 1
+
+
+def _gate(
+    metric: str, value: float, minimum: float | None, *, higher_is_better: bool = True
+) -> bool:
+    """Compare one evaluation metric against its threshold, for CI.
+
+    Args:
+        metric: Name printed in the verdict.
+        value: The measured value.
+        minimum: The threshold; ``None`` disables the gate.
+        higher_is_better: False for losses, where the threshold is a maximum.
+
+    Returns:
+        True when the gate passes or is disabled. Failures are reported on stderr; callers
+        exit non-zero after writing their report, so the report is always produced.
+    """
+    if minimum is None:
+        return True
+    passed = value >= minimum if higher_is_better else value <= minimum
+    bound = ">=" if higher_is_better else "<="
+    if not passed:
+        typer.echo(f"GATE FAILED: {metric} {value:.4f}, required {bound} {minimum}", err=True)
+    return passed
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -55,11 +85,16 @@ DataDir = Annotated[Path | None, typer.Option("--data-dir", help="Overrides FOUR
 Verbose = Annotated[bool, typer.Option("--verbose", "-v")]
 Output = Annotated[Path, typer.Option("--output", "-o")]
 Force = Annotated[bool, typer.Option("--force", help="Re-download seasons already on disk.")]
-Model = Annotated[str | None, typer.Option("--model", help="Ollama model; overrides the default.")]
+Model = Annotated[
+    str | None, typer.Option("--model", help="LLM model id; overrides FOURTHDOWN_LLM_MODEL.")
+]
 Grains = Annotated[str, typer.Option("--grains", help="Comma separated: game, drive.")]
 TopK = Annotated[int, typer.Option("--k", help="Passages to retrieve.")]
 Grain = Annotated[str | None, typer.Option("--grain", help="Restrict to 'game' or 'drive'.")]
 Season = Annotated[int | None, typer.Option("--season", help="Restrict to one season.")]
+Threshold = Annotated[
+    float | None, typer.Option(help="Fail (exit 1) below this score; for CI gates.")
+]
 Team = Annotated[str | None, typer.Option("--team", help="Restrict to a team abbreviation.")]
 
 
@@ -152,7 +187,7 @@ def ask_cmd(
 ) -> None:
     """Answer a question by generating, validating, and running DuckDB SQL."""
     _configure_logging(verbose)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with warehouse.connect(data_paths(data_dir)) as connection:
         chain = TextToSQL(connection, client)
         try:
@@ -176,6 +211,9 @@ def ask_cmd(
 @app.command("eval")
 def eval_cmd(
     output: Output = Path("docs/text_to_sql_eval.md"),
+    min_correct: Annotated[
+        int | None, typer.Option(help="Fail (exit 1) with fewer correct answers.")
+    ] = None,
     model: Model = None,
     data_dir: DataDir = None,
     holdout: Annotated[
@@ -185,7 +223,7 @@ def eval_cmd(
 ) -> None:
     """Run a golden question set and write the execution-accuracy report."""
     _configure_logging(verbose)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with warehouse.connect(data_paths(data_dir)) as connection:
         chain = TextToSQL(connection, client)
         report = harness.evaluate(connection, chain, harness.load_questions(holdout=holdout))
@@ -196,6 +234,8 @@ def eval_cmd(
         f"{report.correct}/{report.total} correct, "
         f"{report.executed}/{report.total} runnable, written to {output}"
     )
+    if not _gate("text-to-SQL correct", report.correct, min_correct):
+        raise typer.Exit(code=1)
 
 
 def _parse_grains(grains: str) -> list[str]:
@@ -271,7 +311,7 @@ def explain_cmd(
 ) -> None:
     """Answer a narrative question from retrieved passages, with citations."""
     _configure_logging(verbose)
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     with DocumentStore.open() as store:
         retriever = Retriever(store, default_embedder())
         try:
@@ -288,6 +328,7 @@ def explain_cmd(
 def eval_retrieval_cmd(
     output: Output = Path("docs/retrieval_eval.md"),
     k: TopK = 5,
+    min_hit_at_1: Threshold = None,
     verbose: Verbose = False,
 ) -> None:
     """Score the retrieval golden set, hybrid against each half on its own."""
@@ -300,6 +341,8 @@ def eval_retrieval_cmd(
         f"hybrid hit@1 {report.hit_at_1():.2f}, recall@{k} {report.recall():.2f}, "
         f"MRR {report.mrr():.3f}, written to {output}"
     )
+    if not _gate("hybrid hit@1", report.hit_at_1(), min_hit_at_1):
+        raise typer.Exit(code=1)
 
 
 SplitSeasons = Annotated[
@@ -362,7 +405,7 @@ def scorecard_cmd(
         raise typer.BadParameter(f"unknown suite(s) {', '.join(unknown)}")
     options = suites.RunOptions(
         paths=data_paths(data_dir),
-        client=default_client() if model is None else OllamaClient(model),
+        client=default_client(model),
         embedder=default_embedder(),
         split=_split(train_seasons, valid_seasons, test_seasons),
         epochs=epochs,
@@ -427,6 +470,11 @@ def train_cmd(
     train_seasons: SplitSeasons = None,
     valid_seasons: SplitSeasons = None,
     test_seasons: SplitSeasons = None,
+    max_wp_log_loss: Annotated[
+        float | None,
+        typer.Option(help="Fail (exit 1) if held-out win-probability log loss exceeds this."),
+    ] = None,
+    min_play_call_accuracy: Threshold = None,
     data_dir: DataDir = None,
     verbose: Verbose = False,
 ) -> None:
@@ -495,6 +543,17 @@ def train_cmd(
         f"play call {results.play_call.accuracy:.1%} vs "
         f"{results.play_call_majority.accuracy:.1%} base rate; written to {output}"
     )
+    gates = [
+        _gate(
+            "win-probability log loss",
+            results.win_probability.log_loss,
+            max_wp_log_loss,
+            higher_is_better=False,
+        ),
+        _gate("play-call accuracy", results.play_call.accuracy, min_play_call_accuracy),
+    ]
+    if not all(gates):
+        raise typer.Exit(code=1)
 
 
 @app.command("advise")
@@ -546,17 +605,29 @@ def chat_cmd(
 ) -> None:
     """Route one question to SQL, retrieval, the advisor, or tendencies, and answer it."""
     _configure_logging(verbose)
-    with agent_build.services(paths=data_paths(data_dir), model=model) as services:
-        if services.readiness.degraded:
-            for name, reason in services.readiness.skipped.items():
+    paths = data_paths(data_dir)
+    client = default_client(model)
+    with ExitStack() as stack:
+        tools: list[Tool] = []
+        # The same openers the services use, in one process: no services need be running.
+        for open_ in (
+            warehouse_service.opener(paths, client),
+            retrieval_service.opener(client),
+            models_service.opener(paths),
+        ):
+            state = open_(stack)
+            tools += state.tools
+            for name, reason in state.skipped.items():
                 typer.echo(f"unavailable: {name} ({reason})", err=True)
+        if not tools:
+            typer.echo("nothing is available to answer with", err=True)
+            raise typer.Exit(code=1)
+        assistant = Assistant(tools, HybridRouter(tools, client))
         try:
-            answer = services.assistant.ask(question, tool=tool)
+            answer = assistant.ask(question, tool=tool)
         except KeyError:
-            typer.echo(
-                f"unknown tool {tool!r}; loaded: {', '.join(services.assistant.tool_names)}",
-                err=True,
-            )
+            loaded = ", ".join(assistant.tool_names)
+            typer.echo(f"unknown tool {tool!r}; loaded: {loaded}", err=True)
             raise typer.Exit(code=1) from None
         typer.echo(f"[{answer.tool}] {answer.route_reason} ({answer.decided_by})\n")
         typer.echo(answer.answer)
@@ -571,21 +642,27 @@ def chat_cmd(
             typer.echo(f"\nSQL:\n{answer.detail['sql']}")
 
 
+SERVICES = ("gateway", "warehouse", "retrieval", "models")
+
+
 @app.command("serve")
 def serve_cmd(
+    service: Annotated[str, typer.Argument(help=f"One of: {', '.join(SERVICES)}.")],
     host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
-    port: Annotated[int, typer.Option("--port")] = 8000,
-    model: Model = None,
+    port: Annotated[int | None, typer.Option("--port", help="Default: the service's.")] = None,
     data_dir: DataDir = None,
-    verbose: Verbose = False,
 ) -> None:
-    """Run the Flask API in front of the assistant."""
-    _configure_logging(verbose)
-    with agent_build.services(paths=data_paths(data_dir), model=model) as services:
-        for name, reason in services.readiness.skipped.items():
-            typer.echo(f"unavailable: {name} ({reason})", err=True)
-        typer.echo(f"tools: {', '.join(services.readiness.tools)}")
-        create_app(provided=services).run(host=host, port=port, threaded=False)
+    """Run one service (see `fourthdown.services`); run all four for the full app.
+
+    Locally: `fourthdown serve warehouse`, `... retrieval`, `... models`, then
+    `... gateway`, each in its own terminal; or `make up` for all of them in Docker.
+    """
+    if service not in SERVICES:
+        typer.echo(f"unknown service {service!r}; choose from {', '.join(SERVICES)}", err=True)
+        raise typer.Exit(code=1)
+    if data_dir is not None:
+        os.environ["FOURTHDOWN_DATA_DIR"] = str(data_dir)
+    importlib.import_module(f"fourthdown.services.{service}").main(host=host, port=port)
 
 
 @app.command("serve-wp")
@@ -641,25 +718,30 @@ def wait_cmd(
 @app.command("eval-routing")
 def eval_routing_cmd(
     output: Output = Path("docs/routing_eval.md"),
+    min_accuracy: Threshold = None,
     model: Model = None,
     verbose: Verbose = False,
 ) -> None:
-    """Score keyword and LLM routing on the golden routing set."""
+    """Score keyword, LLM, and hybrid (the one that serves) routing on the golden set."""
     _configure_logging(verbose)
     tools = routing_harness.catalog()
-    client = default_client() if model is None else OllamaClient(model)
+    client = default_client(model)
     reports = [routing_harness.evaluate(KeywordRouter(tools), name="keyword")]
     if client.available():
-        reports.append(
-            routing_harness.evaluate(LLMRouter(tools, client), name=f"llm ({client.model})")
-        )
+        reports += [
+            routing_harness.evaluate(LLMRouter(tools, client), name=f"llm ({client.model})"),
+            routing_harness.evaluate(HybridRouter(tools, client), name=f"hybrid ({client.model})"),
+        ]
     else:
-        typer.echo(f"skipping the LLM router: no {client.model} at {client.host}", err=True)
+        typer.echo(f"skipping the LLM router: no {client.model} at {client.base_url}", err=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(routing_harness.render(reports))
     for report in reports:
         typer.echo(f"{report.name}: {report.correct}/{report.total} ({report.accuracy():.0%})")
     typer.echo(f"written to {output}")
+    gates = [_gate(f"{r.name} routing accuracy", r.accuracy(), min_accuracy) for r in reports]
+    if not all(gates):
+        raise typer.Exit(code=1)
 
 
 @app.command()

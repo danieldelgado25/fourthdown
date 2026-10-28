@@ -2,14 +2,11 @@
 # values-kind.yaml layers the kind-specific bits (NodePorts, preloaded images) on top.
 
 images:
-  app:
-    repository: fourthdown-app
-    tag: latest
-    pullPolicy: IfNotPresent
-  web:
-    repository: fourthdown-web
-    tag: latest
-    pullPolicy: IfNotPresent
+  # Application images are "<prefix>-<target>:<tag>", built from the repo Dockerfile with
+  # `docker build --target <target>` (`make images`): one per service, plus `pipeline`.
+  prefix: fourthdown
+  tag: latest
+  pullPolicy: IfNotPresent
   winprob:
     repository: fourthdown-winprob
     tag: latest
@@ -24,8 +21,8 @@ images:
     pullPolicy: IfNotPresent
 
 # Warehouse, models, MLflow store, and reports: one volume written by the pipeline Job
-# and read by the API and index Job. ReadWriteOnce is enough on a single-node cluster;
-# a multi-node cluster needs ReadWriteMany.
+# and read by the warehouse and models services and the index Job. ReadWriteOnce is
+# enough on a single-node cluster; a multi-node cluster needs ReadWriteMany.
 data:
   storage: 10Gi
   storageClass: ""
@@ -41,13 +38,58 @@ pipeline:
     requests: {cpu: 200m, memory: 1Gi}
     limits: {cpu: "2", memory: 4Gi}
 
+# The chat model is any OpenAI-compatible endpoint: in-cluster Ollama when baseUrl is
+# empty, otherwise e.g. a vLLM service or a hosted API (key via --set llm.apiKey=...).
+# Embeddings always come from Ollama, to match the narrative index.
 llm:
   model: qwen2.5-coder:7b
   embedModel: nomic-embed-text
+  baseUrl: ""
+  apiKey: ""
+  # Per-completion timeout, and how long the gateway waits for a tool (>= 3 completions).
+  timeoutSeconds: 120
+  toolTimeoutSeconds: 420
+
+# Request threads per service pod; a slow LLM answer does not block fast ones.
+threads: 4
+
+# One entry per application service. `data` mounts the data volume read-only. Services
+# start before their dependencies and heal as they appear (fourthdown.services.common).
+services:
+  gateway:
+    port: 8000
+    replicas: 1
+    data: false
+    service: {type: ClusterIP, nodePort: null}
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  warehouse:
+    port: 8001
+    replicas: 1
+    data: true
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "1", memory: 2Gi}
+  retrieval:
+    port: 8002
+    replicas: 1
+    data: false
+    resources:
+      requests: {cpu: 50m, memory: 128Mi}
+      limits: {cpu: 500m, memory: 512Mi}
+  models:
+    port: 8003
+    replicas: 1
+    data: true
+    resources:
+      requests: {cpu: 100m, memory: 512Mi}
+      limits: {cpu: "1", memory: 2Gi}
 
 ollama:
   # In-cluster Ollama. Set enabled=false and externalUrl to use one outside the cluster;
-  # with neither, the API runs without the LLM (keyword routing, no text-to-SQL).
+  # with neither (and no llm.baseUrl), the gateway routes by keywords and text-to-SQL is
+  # unavailable.
   enabled: true
   externalUrl: ""
   storage: 15Gi
@@ -57,11 +99,13 @@ ollama:
     limits: {cpu: "2", memory: 6Gi}
 
 postgres:
+  # false to use an external database at `externalDsn`.
+  enabled: true
   user: fourthdown
   database: fourthdown
-  # Local-cluster default. Point existingSecret at a Secret with a `password` key instead.
-  password: fourthdown
-  existingSecret: ""
+  # Required when enabled: `--set postgres.password=...`. Never committed.
+  password: ""
+  externalDsn: ""
   storage: 5Gi
   storageClass: ""
   resources:
@@ -69,35 +113,13 @@ postgres:
     limits: {cpu: "1", memory: 1Gi}
 
 index:
-  # Embeds game and postseason-drive narratives; needs Ollama. The API waits for it.
+  # Embeds game and postseason-drive narratives; needs Ollama.
   enabled: true
   seasons: "2024"
-  resources:
-    requests: {cpu: 100m, memory: 512Mi}
-    limits: {cpu: "1", memory: 2Gi}
-
-api:
-  replicas: 1
-  # Gunicorn workers per pod; each opens its own read-only DuckDB connection.
-  workers: 2
   waitTimeoutSeconds: 3600
-  service:
-    type: ClusterIP
-    port: 8000
-    nodePort: null
   resources:
     requests: {cpu: 100m, memory: 512Mi}
     limits: {cpu: "1", memory: 2Gi}
-
-web:
-  replicas: 1
-  service:
-    type: ClusterIP
-    port: 80
-    nodePort: null
-  resources:
-    requests: {cpu: 10m, memory: 32Mi}
-    limits: {cpu: 250m, memory: 128Mi}
 
 winprob:
   # The provenance-checked model image (make wp-image); one image is one trained model.

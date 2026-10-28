@@ -288,11 +288,9 @@ def training_frames(
     connection: duckdb.DuckDBPyConnection, *, holdout_season: int
 ) -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """Conversion, field-goal, and punt frames, all from seasons before the holdout."""
-    conversions = connection.execute(CONVERSION_SQL.format(holdout=holdout_season)).pl()
-    goals = connection.execute(
-        FIELD_GOAL_SQL.format(snap=KICK_SNAP_YARDS, holdout=holdout_season)
-    ).pl()
-    punts = connection.execute(PUNT_SQL.format(holdout=holdout_season)).pl()
+    conversions = connection.sql(CONVERSION_SQL.format(holdout=holdout_season)).pl()
+    goals = connection.sql(FIELD_GOAL_SQL.format(snap=KICK_SNAP_YARDS, holdout=holdout_season)).pl()
+    punts = connection.sql(PUNT_SQL.format(holdout=holdout_season)).pl()
     LOGGER.info(
         "fourth-down components: %s conversions, %s kicks, %s punts",
         f"{conversions.height:,}",

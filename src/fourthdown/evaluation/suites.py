@@ -25,7 +25,7 @@ from fourthdown.config import Paths
 from fourthdown.data import warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness
 from fourthdown.evaluation.scorecard import SuiteResult
-from fourthdown.llm import OllamaClient
+from fourthdown.llm import ChatClient
 from fourthdown.models import train as training
 from fourthdown.models import winprob
 from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
@@ -155,7 +155,7 @@ def references_suite(connection: duckdb.DuckDBPyConnection) -> SuiteResult:
     )
 
 
-def text_to_sql_suite(connection: duckdb.DuckDBPyConnection, client: OllamaClient) -> SuiteResult:
+def text_to_sql_suite(connection: duckdb.DuckDBPyConnection, client: ChatClient) -> SuiteResult:
     chain = TextToSQL(connection, client)
     report = harness.evaluate(connection, chain)
     holdout = harness.evaluate(connection, chain, harness.load_questions(holdout=True))
@@ -232,7 +232,7 @@ def models_suite(
 @dataclass(frozen=True)
 class RunOptions:
     paths: Paths
-    client: OllamaClient
+    client: ChatClient
     embedder: Embedder
     split: SeasonSplit = DEFAULT_SPLIT
     epochs: int = winprob.MAX_EPOCHS
@@ -244,7 +244,7 @@ def _with_warehouse(name: str, options: RunOptions) -> SuiteResult:
     if not options.paths.database.exists():
         return SuiteResult(name, skipped="warehouse not built; run `make build`")
     if name == TEXT_TO_SQL and not options.client.available():
-        return SuiteResult(name, skipped=f"no {options.client.model} at {options.client.host}")
+        return SuiteResult(name, skipped=f"no {options.client.model} at {options.client.base_url}")
     with warehouse.connect(options.paths) as connection:
         if name == REFERENCES:
             return references_suite(connection)
@@ -280,7 +280,9 @@ def _run_one(name: str, options: RunOptions) -> SuiteResult:
         return routing_suite(KeywordRouter(routing_harness.catalog()), ROUTING_KEYWORD)
     if name == ROUTING_LLM:
         if not options.client.available():
-            return SuiteResult(name, skipped=f"no {options.client.model} at {options.client.host}")
+            return SuiteResult(
+                name, skipped=f"no {options.client.model} at {options.client.base_url}"
+            )
         return routing_suite(LLMRouter(routing_harness.catalog(), options.client), ROUTING_LLM)
     if name == RETRIEVAL:
         return _retrieval(options)

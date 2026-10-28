@@ -62,3 +62,64 @@ jobs:
       - name: Ollama log
         if: failure()
         run: tail -100 "$RUNNER_TEMP/ollama.log"
+
+  # Retrieval against the full narrative index (every game, every postseason drive), so
+  # hit@1 is measured on the corpus the app actually searches, not a convenient subset.
+  # Embedding ~8.5k narratives on CPU is the slow part; it runs beside the LLM job.
+  retrieval:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'eval-llm')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      FOURTHDOWN_PG_DSN: postgresql://fourthdown:fourthdown@localhost:5432/fourthdown
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: fourthdown
+          POSTGRES_PASSWORD: fourthdown
+          POSTGRES_DB: fourthdown
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fourthdown"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      ollama:
+        image: ollama/ollama:0.35.1
+        ports:
+          - 11434:11434
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install CPU torch (the default wheel drags in CUDA)
+        run: pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -e ".[dev]"
+      - name: Restore nflverse downloads
+        uses: actions/cache@v4
+        with:
+          path: data/raw
+          key: nflverse-pbp-2009-2024-v1
+      - name: Build the warehouse
+        run: fourthdown build --seasons 2009-2024
+      - name: Pull the embedding model
+        run: |
+          curl -sf http://localhost:11434/api/pull -d '{"model": "nomic-embed-text", "stream": false}'
+      - name: Index every narrative
+        run: fourthdown index --seasons 2009- --playoff-drives
+      - name: Scorecard (retrieval)
+        run: >-
+          fourthdown scorecard --suites retrieval --require retrieval
+          --output eval/scorecard.md --json eval/scorecard.json
+      - name: Publish the scorecard to the job summary
+        if: always() && hashFiles('eval/scorecard.md') != ''
+        run: cat eval/scorecard.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('eval/scorecard.json') != ''
+        with:
+          name: scorecard-retrieval
+          path: eval/
