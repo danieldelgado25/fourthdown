@@ -1,0 +1,51 @@
+# A single-server deployment on top of docker-compose.yml: published images from ghcr.io,
+# restarts on failure and reboot, and Caddy in front for HTTPS (automatic Let's Encrypt)
+# and basic auth, since /api/ask runs the LLM. Only Caddy is reachable from outside.
+#   alias dc='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
+#   dc --profile pipeline pull && dc --profile pipeline up --no-build index   # once: data + index
+#   dc --profile app pull && dc --profile app up -d --no-build
+# .env needs POSTGRES_PASSWORD, FOURTHDOWN_DOMAIN, BASIC_AUTH_USER and BASIC_AUTH_HASH
+# (see .env.example); FOURTHDOWN_TAG pins a commit's images (default latest).
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres: *restart
+  ollama: *restart
+  pipeline:
+    image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
+  index:
+    image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
+  warehouse:
+    <<: *restart
+    image: ghcr.io/danieldelgado25/fourthdown-warehouse:${FOURTHDOWN_TAG:-latest}
+  retrieval:
+    <<: *restart
+    image: ghcr.io/danieldelgado25/fourthdown-retrieval:${FOURTHDOWN_TAG:-latest}
+  models:
+    <<: *restart
+    image: ghcr.io/danieldelgado25/fourthdown-models:${FOURTHDOWN_TAG:-latest}
+  gateway:
+    <<: *restart
+    image: ghcr.io/danieldelgado25/fourthdown-gateway:${FOURTHDOWN_TAG:-latest}
+    ports: !reset []   # reached only through Caddy
+
+  caddy:
+    image: caddy:2.10
+    profiles: [app]
+    restart: unless-stopped
+    environment:
+      FOURTHDOWN_DOMAIN: ${FOURTHDOWN_DOMAIN:?set FOURTHDOWN_DOMAIN in .env}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?set BASIC_AUTH_USER in .env}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?set BASIC_AUTH_HASH in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy:/data
+    depends_on: [gateway]
+
+volumes:
+  caddy:

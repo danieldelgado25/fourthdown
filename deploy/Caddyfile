@@ -1,0 +1,9 @@
+# HTTPS for FOURTHDOWN_DOMAIN (certificates are automatic once its DNS points here), basic
+# auth on everything, and the gateway behind it. Used by docker-compose.prod.yml.
+{$FOURTHDOWN_DOMAIN} {
+	encode gzip
+	basic_auth {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+	reverse_proxy gateway:8000
+}

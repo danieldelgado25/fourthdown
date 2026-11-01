@@ -235,6 +235,30 @@ The warehouse stores its Parquet glob relative to the data root, so the same
 `fourthdown.duckdb` opens on the host and at `/data` in a container. Warehouses built
 before that change need one `fourthdown warehouse` to pick it up.
 
+### Deploying to a server
+
+`docker-compose.prod.yml` runs the same stack on one Linux VM, using the images CI
+publishes to ghcr.io on each green push to `main`. Caddy sits in front and is the only
+public port: it provides HTTPS (certificates from Let's Encrypt) and basic auth, since
+`/api/ask` runs the LLM. The bundled CPU Ollama needs about 6 GB, so use a VM with at
+least 4 vCPUs and 16 GB of RAM, plus about 40 GB of disk for the data, models, and images.
+
+1. Point a DNS A record at the VM and open ports 80 and 443.
+2. Install Docker, `git clone` the repo, `cp .env.example .env`, and fill in the
+   production block.
+3. Make the ghcr packages public, or run `docker login ghcr.io` with a token that can
+   read packages.
+4. Run:
+
+```bash
+alias dc='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
+dc --profile pipeline pull && dc --profile pipeline up --no-build index   # once: download, train, index
+dc --profile app pull && dc --profile app up -d --no-build
+```
+
+Updating is the last line again. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins a release,
+which is also how you roll back.
+
 ### Running it on Kubernetes
 
 `deploy/helm/fourthdown` runs the four services as Deployments, Postgres and Ollama as
