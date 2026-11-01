@@ -30,7 +30,7 @@ COPY src ./src
 
 FROM python AS torch
 # CPU torch first; the default wheel drags in CUDA.
-RUN pip install "torch==2.14.0" --index-url https://download.pytorch.org/whl/cpu
+RUN pip install "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
 
 FROM python AS gateway
 RUN pip install -c /tmp/constraints.txt .
