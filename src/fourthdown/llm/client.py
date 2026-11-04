@@ -12,7 +12,8 @@ therefore configuration, not code:
   ``OLLAMA_HOST`` (``http://localhost:11434``) + ``/v1``.
 * ``FOURTHDOWN_LLM_MODEL`` -- the model id at that endpoint (default ``qwen2.5-coder:7b``).
 * ``FOURTHDOWN_LLM_API_KEY`` -- sent as a bearer token when set; never logged.
-* ``FOURTHDOWN_LLM_TIMEOUT`` -- seconds per completion (default 120).
+* ``FOURTHDOWN_LLM_TIMEOUT`` -- seconds per completion (default 120), including any
+  waits on a rate-limited (429) reply.
 
 Defaults suit SQL generation: temperature 0, so the same question produces the same query.
 Ollama's context window is set on the server (``OLLAMA_CONTEXT_LENGTH``), not per request.
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Protocol
 
 import requests
@@ -32,6 +34,8 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 DEFAULT_TIMEOUT = 120.0
 PROBE_TIMEOUT = 5.0
+RATE_LIMIT_WAIT = 2.0
+"""Seconds to wait on a 429 that carries no usable ``Retry-After`` header."""
 
 
 class LLMError(RuntimeError):
@@ -135,13 +139,22 @@ class ChatClient:
             ],
         }
         LOGGER.debug("prompting %s with %d chars", self._model, len(prompt))
+        deadline = time.monotonic() + self._timeout
         try:
-            response = requests.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-                timeout=self._timeout,
-            )
+            while True:
+                response = requests.post(
+                    f"{self._base_url}/chat/completions",
+                    json=payload,
+                    headers=self._headers(),
+                    timeout=max(deadline - time.monotonic(), 1.0),
+                )
+                # Hosted free tiers meter tokens per minute; wait out a short limit
+                # rather than fail the question, but never past the completion budget.
+                wait = _retry_after(response)
+                if wait is None or time.monotonic() + wait > deadline:
+                    break
+                LOGGER.info("rate limited by %s; retrying in %.1fs", self._base_url, wait)
+                time.sleep(wait)
             response.raise_for_status()
             body = response.json()
         except requests.RequestException as error:
@@ -155,6 +168,16 @@ class ChatClient:
         if not content:
             raise LLMError(f"the LLM returned no content: {str(body)[:200]}")
         return str(content)
+
+
+def _retry_after(response: requests.Response) -> float | None:
+    """Seconds to wait before retrying a 429, or ``None`` when the reply is not one."""
+    if response.status_code != 429:
+        return None
+    try:
+        return max(float(response.headers.get("retry-after", RATE_LIMIT_WAIT)), 0.0)
+    except ValueError:
+        return RATE_LIMIT_WAIT
 
 
 def default_client(model: str | None = None) -> ChatClient:

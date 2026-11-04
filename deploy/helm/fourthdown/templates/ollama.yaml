@@ -63,7 +63,8 @@ spec:
           requests:
             storage: {{ .Values.ollama.storage }}
 ---
-{{- $models := printf "%s %s" .Values.llm.model .Values.llm.embedModel }}
+{{- /* A hosted chat model id is not pullable; only pull it when Ollama serves chat. */}}
+{{- $models := ternary (printf "%s %s" .Values.llm.model .Values.llm.embedModel) .Values.llm.embedModel (empty .Values.llm.baseUrl) }}
 apiVersion: batch/v1
 kind: Job
 metadata:

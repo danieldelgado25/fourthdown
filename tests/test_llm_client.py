@@ -12,9 +12,10 @@ from fourthdown.llm.client import ChatClient, LLMError
 
 
 class Reply:
-    def __init__(self, body: Any, status: int = 200) -> None:
+    def __init__(self, body: Any, status: int = 200, headers: dict[str, str] | None = None):
         self._body = body
         self.status_code = status
+        self.headers = headers or {}
 
     def json(self) -> Any:
         return self._body
@@ -70,6 +71,26 @@ def test_errors_and_empty_replies_raise(monkeypatch):
     monkeypatch.setattr(llm.requests, "post", lambda url, **kw: Reply({"choices": []}))
     with pytest.raises(LLMError, match="no content"):
         client.complete(system="s", prompt="q")
+
+
+def test_rate_limits_are_retried_after_the_advertised_wait(monkeypatch):
+    replies = [
+        Reply({}, status=429, headers={"retry-after": "3"}),
+        Reply({"choices": [{"message": {"content": "SELECT 1"}}]}),
+    ]
+    slept: list[float] = []
+    monkeypatch.setattr(llm.requests, "post", lambda url, **kw: replies.pop(0))
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
+    assert ChatClient("m", base_url="http://x/v1", timeout=30).complete(system="s", prompt="q")
+    assert slept == [3.0]
+
+
+def test_rate_limit_waits_never_exceed_the_timeout(monkeypatch):
+    limited = Reply({}, status=429, headers={"retry-after": "60"})
+    monkeypatch.setattr(llm.requests, "post", lambda url, **kw: limited)
+    monkeypatch.setattr(llm.time, "sleep", pytest.fail)
+    with pytest.raises(LLMError, match="429"):
+        ChatClient("m", base_url="http://x/v1", timeout=30).complete(system="s", prompt="q")
 
 
 def test_available_requires_the_model_to_be_listed(monkeypatch):

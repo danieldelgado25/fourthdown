@@ -240,8 +240,16 @@ before that change need one `fourthdown warehouse` to pick it up.
 `docker-compose.prod.yml` runs the same stack on one Linux VM, using the images CI
 publishes to ghcr.io on each green push to `main`. Caddy sits in front and is the only
 public port: it provides HTTPS (certificates from Let's Encrypt) and basic auth, since
-`/api/ask` runs the LLM. The bundled CPU Ollama needs about 6 GB, so use a VM with at
-least 4 vCPUs and 16 GB of RAM, plus about 40 GB of disk for the data, models, and images.
+`/api/ask` runs the LLM. Size the VM by where chat runs:
+
+- **Hosted chat model** (recommended): set `FOURTHDOWN_LLM_BASE_URL`, `_MODEL`, and
+  `_API_KEY` to any OpenAI-compatible API (`.env.example` has a Groq example and timeouts to
+  match). Ollama then only serves the small embedding model, so 2 vCPUs and 4 GB of RAM
+  suffice, and answers come back in seconds.
+- **Bundled CPU Ollama**: the 7B chat model needs about 6 GB on its own and a minute or
+  more per answer, so use at least 4 vCPUs and 16 GB of RAM.
+
+Either way, allow about 40 GB of disk for the data, models, and images.
 
 1. Point a DNS A record at the VM and open ports 80 and 443.
 2. Install Docker, `git clone` the repo, `cp .env.example .env`, and fill in the
@@ -328,7 +336,7 @@ src/fourthdown/
   rag/
     schema_card.py    the prompt's view/column/semantics card, read from the live catalog
     text_to_sql.py    generate -> validate -> execute, with repair-on-error
-  llm/client.py       Ollama behind a one-method protocol
+  llm/client.py       any OpenAI-compatible chat API behind a one-method protocol
   models/
     features.py       leakage-safe design matrices and season-disjoint splits
     winprob.py        the PyTorch win-probability net, game state, training loop
