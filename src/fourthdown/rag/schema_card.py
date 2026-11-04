@@ -88,7 +88,12 @@ VIEW_COLUMN_NOTES: dict[tuple[str, str], str] = {
     ("player_game", "epa_per_play"): (
         "for this game only; a season value is sum(epa_per_play * plays) / sum(plays)"
     ),
-    ("player_game", "yards"): "yards gained on those plays, not official passing/rushing yards",
+    ("player_game", "yards"): (
+        "passing, rushing, or receiving yards by role; sacks and two-point tries excluded"
+    ),
+    ("player_game", "touchdowns"): (
+        "touchdowns the player scored or threw in this role; defensive return TDs do not count"
+    ),
     ("team_game", "plays"): "all plays including special teams; designed_plays excludes them",
 }
 

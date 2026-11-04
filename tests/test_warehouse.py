@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import duckdb
+import polars as pl
 import pytest
 
 from fourthdown.config import data_paths
@@ -33,6 +34,32 @@ def test_team_game_pass_rate_counts_designed_plays_only(connection):
     # Three plays for BBB, of which the kneel is not a call: one pass, one run.
     assert (plays, designed_plays) == (3, 2)
     assert pass_rate == pytest.approx(0.5)
+
+
+def test_player_game_follows_box_score_conventions(raw_frame, tmp_paths):
+    # One passer: a 20-yard TD, a pick-six, an 8-yard sack, and a two-point try.
+    plays = [
+        {"yards_gained": 20.0, "touchdown": 1.0, "pass_touchdown": 1.0},
+        {"yards_gained": 0.0, "touchdown": 1.0, "interception": 1.0},
+        {"yards_gained": -8.0, "sack": 1.0},
+        {"yards_gained": 2.0, "two_point_attempt": 1.0},
+    ]
+    template = raw_frame.head(1)
+    rows = []
+    for play_id, play in enumerate(plays, start=1):
+        values = {"touchdown": 0.0, "pass_touchdown": 0.0, "interception": 0.0, "sack": 0.0}
+        values |= {"two_point_attempt": 0.0, **play, "play_id": float(play_id)}
+        columns = [pl.lit(value).alias(name) for name, value in values.items()]
+        rows.append(template.with_columns(*columns, passer_player_id=pl.lit("QB1")))
+    pl.concat(rows, how="vertical_relaxed").write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    with duckdb.connect(":memory:") as connection:
+        warehouse.create_views(connection, tmp_paths)
+        row = connection.execute(
+            "SELECT plays, yards, touchdowns FROM player_game WHERE role = 'passer'"
+        ).fetchone()
+    # The sack is still a dropback (it counts toward plays and EPA), not passing yards.
+    assert row == (3, 20, 1)
 
 
 def test_drives_view_aggregates_by_drive(connection):

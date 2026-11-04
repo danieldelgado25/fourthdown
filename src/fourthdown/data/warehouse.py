@@ -112,18 +112,21 @@ WHERE posteam IS NOT NULL
 GROUP BY game_id, posteam
 """
 
+# Box-score conventions: two-point tries are not plays, sack yardage is charged to the team
+# rather than the passer, and a touchdown counts for a role only when that role scored it
+# (`touchdown` alone also fires on the defence's pick-six or fumble return).
 PLAYER_GAME_VIEW = """
 CREATE OR REPLACE VIEW player_game AS
 SELECT
     game_id, season, week, posteam AS team, 'passer' AS role,
     passer_player_id AS player_id, passer_player_name AS player_name,
     count(*) AS plays,
-    sum(yards_gained) AS yards,
-    sum(touchdown::INT) AS touchdowns,
+    coalesce(sum(yards_gained) FILTER (WHERE NOT coalesce(sack, false)), 0) AS yards,
+    sum(coalesce(pass_touchdown, false)::INT) AS touchdowns,
     avg(epa) AS epa_per_play,
     avg(cpoe) AS cpoe
 FROM plays
-WHERE passer_player_id IS NOT NULL
+WHERE passer_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
 GROUP BY ALL
 UNION ALL
 SELECT
@@ -131,11 +134,11 @@ SELECT
     rusher_player_id AS player_id, rusher_player_name AS player_name,
     count(*) AS plays,
     sum(yards_gained) AS yards,
-    sum(touchdown::INT) AS touchdowns,
+    sum(coalesce(rush_touchdown, false)::INT) AS touchdowns,
     avg(epa) AS epa_per_play,
     NULL AS cpoe
 FROM plays
-WHERE rusher_player_id IS NOT NULL
+WHERE rusher_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
 GROUP BY ALL
 UNION ALL
 SELECT
@@ -143,11 +146,11 @@ SELECT
     receiver_player_id AS player_id, receiver_player_name AS player_name,
     count(*) AS plays,
     sum(yards_gained) AS yards,
-    sum(touchdown::INT) AS touchdowns,
+    sum(coalesce(pass_touchdown, false)::INT) AS touchdowns,
     avg(epa) AS epa_per_play,
     NULL AS cpoe
 FROM plays
-WHERE receiver_player_id IS NOT NULL
+WHERE receiver_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
 GROUP BY ALL
 """
 
