@@ -452,8 +452,14 @@ def lineage_cmd(
         if problems:
             raise typer.Exit(code=1)
         typer.echo(f"{len(manifest.processed)} partitions match the manifest")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(provenance.render(manifest))
+    try:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(provenance.render(manifest))
+    except OSError as error:
+        # The default lands in docs/, which an image's working directory may not allow;
+        # a passed --verify is still a pass, and the report is the only thing missing.
+        typer.echo(f"could not write the report to {output} ({error}); pass --output", err=True)
+        raise typer.Exit(code=0 if verify else 1) from error
     typer.echo(f"data version {manifest.data_version}; lineage written to {output}")
 
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typer.testing import CliRunner
+
+from fourthdown.cli import app
 from fourthdown.data import etl, ingest, provenance, warehouse
 
 
@@ -53,6 +56,17 @@ def test_verify_passes_on_untouched_files_and_catches_drift(raw_frame, tmp_paths
     raw_frame.head(1).write_parquet(tmp_paths.season_raw(2023))
     problems = provenance.verify(tmp_paths)
     assert any("different raw file" in problem for problem in problems)
+
+
+def test_an_unwritable_report_does_not_fail_a_passed_verify(raw_frame, tmp_paths, tmp_path):
+    _build(raw_frame, tmp_paths)
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("")
+    args = ["lineage", "--data-dir", str(tmp_paths.root), "--output", str(blocker / "x.md")]
+    verified = CliRunner().invoke(app, [*args, "--verify"])
+    assert verified.exit_code == 0, verified.output
+    assert "partitions match" in verified.output and "pass --output" in verified.output
+    assert CliRunner().invoke(app, args).exit_code == 1
 
 
 def test_verify_catches_an_edited_partition(raw_frame, tmp_paths):
