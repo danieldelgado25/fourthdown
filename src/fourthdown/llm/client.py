@@ -13,7 +13,7 @@ therefore configuration, not code:
 * ``FOURTHDOWN_LLM_MODEL`` -- the model id at that endpoint (default ``qwen2.5-coder:7b``).
 * ``FOURTHDOWN_LLM_API_KEY`` -- sent as a bearer token when set; never logged.
 * ``FOURTHDOWN_LLM_TIMEOUT`` -- seconds per completion (default 120), including any
-  waits on a rate-limited (429) reply.
+  waits on a rate-limited (429) or overloaded (502-504) reply.
 
 Defaults suit SQL generation: temperature 0, so the same question produces the same query.
 Ollama's context window is set on the server (``OLLAMA_CONTEXT_LENGTH``), not per request.
@@ -34,8 +34,10 @@ DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 DEFAULT_MODEL = "qwen2.5-coder:7b"
 DEFAULT_TIMEOUT = 120.0
 PROBE_TIMEOUT = 5.0
+RETRYABLE_STATUSES = frozenset({429, 502, 503, 504})
+"""Rate limited, or the provider is overloaded or briefly unreachable behind its proxy."""
 RATE_LIMIT_WAIT = 2.0
-"""Seconds to wait on a 429 that carries no usable ``Retry-After`` header."""
+"""Seconds to wait on a retryable reply that carries no usable ``Retry-After`` header."""
 
 
 class LLMError(RuntimeError):
@@ -148,12 +150,18 @@ class ChatClient:
                     headers=self._headers(),
                     timeout=max(deadline - time.monotonic(), 1.0),
                 )
-                # Hosted free tiers meter tokens per minute; wait out a short limit
-                # rather than fail the question, but never past the completion budget.
+                # Hosted free tiers meter tokens per minute and shed load with a 503;
+                # wait those out rather than fail the question, but never past the
+                # completion budget.
                 wait = _retry_after(response)
                 if wait is None or time.monotonic() + wait > deadline:
                     break
-                LOGGER.info("rate limited by %s; retrying in %.1fs", self._base_url, wait)
+                LOGGER.info(
+                    "%s answered %d; retrying in %.1fs",
+                    self._base_url,
+                    response.status_code,
+                    wait,
+                )
                 time.sleep(wait)
             response.raise_for_status()
             body = response.json()
@@ -171,8 +179,8 @@ class ChatClient:
 
 
 def _retry_after(response: requests.Response) -> float | None:
-    """Seconds to wait before retrying a 429, or ``None`` when the reply is not one."""
-    if response.status_code != 429:
+    """Seconds to wait before retrying a transient failure, or ``None`` for any other reply."""
+    if response.status_code not in RETRYABLE_STATUSES:
         return None
     try:
         return max(float(response.headers.get("retry-after", RATE_LIMIT_WAIT)), 0.0)

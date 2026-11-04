@@ -85,6 +85,20 @@ def test_rate_limits_are_retried_after_the_advertised_wait(monkeypatch):
     assert slept == [3.0]
 
 
+def test_overloaded_providers_are_retried_but_server_errors_are_not(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
+    replies = [Reply({}, status=503), Reply({"choices": [{"message": {"content": "SELECT 1"}}]})]
+    monkeypatch.setattr(llm.requests, "post", lambda url, **kw: replies.pop(0))
+    assert ChatClient("m", base_url="http://x/v1", timeout=30).complete(system="s", prompt="q")
+    assert slept == [llm.RATE_LIMIT_WAIT]
+
+    monkeypatch.setattr(llm.requests, "post", lambda url, **kw: Reply({}, status=500))
+    with pytest.raises(LLMError, match="500"):
+        ChatClient("m", base_url="http://x/v1", timeout=30).complete(system="s", prompt="q")
+    assert slept == [llm.RATE_LIMIT_WAIT]
+
+
 def test_rate_limit_waits_never_exceed_the_timeout(monkeypatch):
     limited = Reply({}, status=429, headers={"retry-after": "60"})
     monkeypatch.setattr(llm.requests, "post", lambda url, **kw: limited)
