@@ -13,6 +13,11 @@ gateway with a React dashboard over four independently deployable services, gate
 evaluation in CI, and Docker Compose and Helm deployments. Design notes and phase history
 are in [docs/architecture.md](docs/architecture.md).
 
+**Live demo:** https://fourthdown-daniel.belgiumcentral.cloudapp.azure.com, behind a
+login. A rate-limited guest login is available on request, and the server is started on
+demand, so ask before visiting. How it runs is under
+[The live deployment](#the-live-deployment).
+
 ## Quickstart
 
 ```bash
@@ -272,6 +277,23 @@ The first run hands `./data` to uid 10001, the user every image runs as (the
 `FOURTHDOWN_INDEX_SEASONS` (default 2024); widen it in `.env` and rerun that line to
 index more. Updating is the last line again. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
 a release, which is also how you roll back.
+
+#### The live deployment
+
+The demo runs exactly this, on the smallest VM the hosted-model setup allows:
+
+| | |
+| --- | --- |
+| Host | Azure VM, Standard_B2als_v2: 2 vCPUs (AMD, burstable), 4 GiB RAM, Belgium Central |
+| OS and disk | Ubuntu 24.04 LTS, 64 GB Standard SSD, plus a 4 GB swapfile |
+| Runtime | Docker Engine with Compose; the base file plus `docker-compose.prod.yml` |
+| Images | the five ghcr.io images CI publishes from `main`, pulled rather than built |
+| Front door | Caddy 2.10: Let's Encrypt HTTPS on an Azure DNS name, basic auth with an owner and a rate-limited guest login |
+| Network | a static public IP; the firewall admits only SSH, 80, and 443 |
+| Chat model | `openai/gpt-oss-120b` on Groq's OpenAI-compatible API, so answers take seconds |
+| Embeddings | `nomic-embed-text` on the bundled Ollama, CPU only |
+| Data | the 2009-2024 warehouse and trained models, built on the VM by the pipeline job; 2024 game and postseason-drive narratives indexed in pgvector |
+| Cost | stopped (deallocated) between demos, so it bills by the hour only while running; every service restarts on boot |
 
 ### Running it on Kubernetes
 
