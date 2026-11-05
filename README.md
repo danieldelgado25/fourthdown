@@ -13,10 +13,10 @@ gateway with a React dashboard over four independently deployable services, gate
 evaluation in CI, and Docker Compose and Helm deployments. Design notes and phase history
 are in [docs/architecture.md](docs/architecture.md).
 
-**Live demo:** https://fourthdown-daniel.belgiumcentral.cloudapp.azure.com, behind a
-login. A rate-limited guest login is available on request, and the server is started on
-demand, so ask before visiting. How it runs is under
-[The live deployment](#the-live-deployment).
+**Live demo:** https://fourthdown-daniel.belgiumcentral.cloudapp.azure.com, guest login
+`guest` / `WOWCOOLPROJECT!`. The server is started on demand, so ask before visiting.
+Guests get a limited number of questions, and flooding the API blocks your address for a
+day. How it runs is under [The live deployment](#the-live-deployment).
 
 ## Quickstart
 
