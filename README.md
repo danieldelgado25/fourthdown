@@ -264,8 +264,11 @@ dc --profile pipeline pull && dc --profile pipeline up --no-build index   # once
 dc --profile app pull && dc --profile app up -d --no-build
 ```
 
-Updating is the last line again. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins a release,
-which is also how you roll back.
+The first run hands `./data` to uid 10001, the user every image runs as (the
+`data-owner` step), then builds the warehouse and trains in place. The index covers
+`FOURTHDOWN_INDEX_SEASONS` (default 2024); widen it in `.env` and rerun that line to
+index more. Updating is the last line again. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
+a release, which is also how you roll back.
 
 ### Running it on Kubernetes
 

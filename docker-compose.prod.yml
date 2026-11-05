@@ -12,6 +12,8 @@ x-restart: &restart
 services:
   postgres: *restart
   ollama: *restart
+  data-owner:
+    image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
   pipeline:
     image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
   index:
