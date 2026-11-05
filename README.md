@@ -253,7 +253,10 @@ Either way, allow about 40 GB of disk for the data, models, and images.
 
 1. Point a DNS A record at the VM and open ports 80 and 443.
 2. Install Docker, `git clone` the repo, `cp .env.example .env`, and fill in the
-   production block.
+   production block. It sets two logins: yours, and a guest login to hand out. Guests
+   get a few questions per session and per address per day, all guests together share
+   a daily cap, and an address that floods `/api/ask` is blocked for a day. Your own
+   login is never limited.
 3. Make the ghcr packages public, or run `docker login ghcr.io` with a token that can
    read packages.
 4. Run:

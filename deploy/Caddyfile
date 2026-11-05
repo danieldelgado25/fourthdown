@@ -1,9 +1,14 @@
 # HTTPS for FOURTHDOWN_DOMAIN (certificates are automatic once its DNS points here), basic
 # auth on everything, and the gateway behind it. Used by docker-compose.prod.yml.
+# Two logins: the owner's, and a guest the gateway rate-limits (fourthdown.services.guests).
 {$FOURTHDOWN_DOMAIN} {
 	encode gzip
 	basic_auth {
 		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+		{$GUEST_AUTH_USER} {$GUEST_AUTH_HASH}
 	}
-	reverse_proxy gateway:8000
+	reverse_proxy gateway:8000 {
+		# Replaces any value the client sent, so the gateway can trust it.
+		header_up X-Fourthdown-User {http.auth.user.id}
+	}
 }

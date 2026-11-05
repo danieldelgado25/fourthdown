@@ -12,7 +12,7 @@ from fourthdown.agent.tools import Evidence, Passage, Table, evidence_from_json,
 from fourthdown.llm import LLMError
 from fourthdown.models.fourth_down import FourthDownAdvisor, PuntModel
 from fourthdown.models.winprob import GameState
-from fourthdown.services import gateway, models, warehouse
+from fourthdown.services import gateway, guests, models, warehouse
 from fourthdown.services.common import Capabilities, Reloading, tool_service
 
 
@@ -313,6 +313,40 @@ def test_gateway_reports_a_tool_whose_service_vanished(http):
     api = gateway.create_app(catalog, DownLLM(), http).test_client()
     body = api.post("/api/ask", json={"question": "what happened in week 1"}).get_json()
     assert body["failed"] and "unreachable" in body["answer"]
+
+
+def _guest_api(http, **limits: int):
+    catalog = gateway.Catalog(["http://warehouse", "http://retrieval", "http://models"], http)
+    limiter = guests.GuestLimiter(guests.GuestPolicy("guest", **limits))
+    return gateway.create_app(catalog, DownLLM(), http, guests=limiter).test_client()
+
+
+def _ask(api, user: str, address: str = "203.0.113.7"):
+    headers = {guests.USER_HEADER: user, "X-Forwarded-For": f"6.6.6.6, {address}"}
+    return api.post("/api/ask", json={"question": "how many sacks"}, headers=headers)
+
+
+def test_gateway_limits_the_guest_per_session_but_not_the_owner(http):
+    api = _guest_api(http, per_session=2)
+    first = _ask(api, "guest")
+    assert first.status_code == 200
+    assert guests.SESSION_COOKIE in first.headers["Set-Cookie"]
+    assert _ask(api, "guest").status_code == 200
+    refused = _ask(api, "guest")
+    assert refused.status_code == 429 and "per session" in refused.get_json()["error"]
+    assert all(_ask(api, "admin").status_code == 200 for _ in range(5))
+    assert api.post("/api/ask", json={"question": "how many sacks"}).status_code == 200
+
+
+def test_gateway_blocks_a_flooding_guest_address_everywhere(http):
+    api = _guest_api(http, burst=3)
+    statuses = [_ask(api, "guest").status_code for _ in range(4)]
+    assert statuses == [200, 200, 200, 403]
+    headers = {guests.USER_HEADER: "guest", "X-Forwarded-For": "203.0.113.7"}
+    assert api.get("/api/health", headers=headers).status_code == 403
+    # The address Caddy appended is the one blocked, not whatever the client claimed.
+    assert _ask(api, "guest", address="198.51.100.1").status_code == 200
+    assert _ask(api, "admin").status_code == 200
 
 
 def test_gateway_serves_the_dashboard_without_cors(http, tmp_path, monkeypatch):

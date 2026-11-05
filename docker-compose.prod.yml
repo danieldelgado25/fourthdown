@@ -4,8 +4,9 @@
 #   alias dc='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
 #   dc --profile pipeline pull && dc --profile pipeline up --no-build index   # once: data + index
 #   dc --profile app pull && dc --profile app up -d --no-build
-# .env needs POSTGRES_PASSWORD, FOURTHDOWN_DOMAIN, BASIC_AUTH_USER and BASIC_AUTH_HASH
-# (see .env.example); FOURTHDOWN_TAG pins a commit's images (default latest).
+# .env needs POSTGRES_PASSWORD, FOURTHDOWN_DOMAIN, BASIC_AUTH_USER/_HASH, and the
+# rate-limited guest login GUEST_AUTH_USER/_HASH (see .env.example); FOURTHDOWN_TAG pins
+# a commit's images (default latest).
 x-restart: &restart
   restart: unless-stopped
 
@@ -30,7 +31,12 @@ services:
   gateway:
     <<: *restart
     image: ghcr.io/danieldelgado25/fourthdown-gateway:${FOURTHDOWN_TAG:-latest}
-    ports: !reset []   # reached only through Caddy
+    ports: !reset []   # reached only through Caddy, so its identity headers can be trusted
+    environment:
+      FOURTHDOWN_GUEST_USER: ${GUEST_AUTH_USER:?set GUEST_AUTH_USER in .env}
+      FOURTHDOWN_GUEST_SESSION_LIMIT: ${FOURTHDOWN_GUEST_SESSION_LIMIT:-}
+      FOURTHDOWN_GUEST_IP_DAILY_LIMIT: ${FOURTHDOWN_GUEST_IP_DAILY_LIMIT:-}
+      FOURTHDOWN_GUEST_DAILY_LIMIT: ${FOURTHDOWN_GUEST_DAILY_LIMIT:-}
 
   caddy:
     image: caddy:2.10
@@ -40,6 +46,8 @@ services:
       FOURTHDOWN_DOMAIN: ${FOURTHDOWN_DOMAIN:?set FOURTHDOWN_DOMAIN in .env}
       BASIC_AUTH_USER: ${BASIC_AUTH_USER:?set BASIC_AUTH_USER in .env}
       BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?set BASIC_AUTH_HASH in .env}
+      GUEST_AUTH_USER: ${GUEST_AUTH_USER:?set GUEST_AUTH_USER in .env}
+      GUEST_AUTH_HASH: ${GUEST_AUTH_HASH:?set GUEST_AUTH_HASH in .env}
     ports:
       - "80:80"
       - "443:443"

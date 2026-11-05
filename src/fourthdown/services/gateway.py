@@ -14,8 +14,9 @@ Public endpoints (the contract `web/src/api.ts` types):
     ``GET  /``               -- the built dashboard, when ``web/dist`` exists.
 
 Configuration: ``FOURTHDOWN_SERVICES`` (comma-separated base URLs of the tool services),
-``FOURTHDOWN_TOOL_TIMEOUT``, ``FOURTHDOWN_WEB_DIR``, and the LLM settings in
-`fourthdown.llm.client`. Default port 8000.
+``FOURTHDOWN_TOOL_TIMEOUT``, ``FOURTHDOWN_WEB_DIR``, the LLM settings in
+`fourthdown.llm.client`, and the guest limits in `fourthdown.services.guests`. Default
+port 8000.
 
 Run: ``python -m fourthdown.services.gateway`` or ``fourthdown serve gateway``.
 """
@@ -24,13 +25,14 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import requests
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, after_this_request, jsonify, request
 
 from fourthdown.agent.assistant import Assistant, answer_json
 from fourthdown.agent.router import HybridRouter
@@ -41,6 +43,13 @@ from fourthdown.services.common import (
     configure_logging,
     llm_available,
     serve,
+)
+from fourthdown.services.guests import (
+    BLOCKED_MESSAGE,
+    SESSION_COOKIE,
+    USER_HEADER,
+    GuestLimiter,
+    GuestPolicy,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -213,13 +222,25 @@ def _proxy(http: HTTP, method: str, url: str, **kwargs: Any) -> tuple[Response, 
         return jsonify({"error": f"upstream unavailable: {error}"}), 502
 
 
-def create_app(catalog: Catalog, client: LLMClient, http: HTTP = requests) -> Flask:
+def _client_address() -> str:
+    """The caller's address: the last ``X-Forwarded-For`` hop (Caddy's), else the socket's."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return forwarded.rsplit(",", 1)[-1].strip() or request.remote_addr or "unknown"
+
+
+def create_app(
+    catalog: Catalog,
+    client: LLMClient,
+    http: HTTP = requests,
+    guests: GuestLimiter | None = None,
+) -> Flask:
     """The gateway app.
 
     Args:
         catalog: Tool discovery over the configured services.
         client: The routing LLM (the router falls back to keywords if it fails).
         http: Transport for the proxied endpoints (the `requests` module in production).
+        guests: Limits for the guest login; ``None`` limits nobody.
 
     Returns:
         The Flask app serving the endpoints listed in the module docstring. The dashboard
@@ -229,6 +250,37 @@ def create_app(catalog: Catalog, client: LLMClient, http: HTTP = requests) -> Fl
     app = Flask(__name__, static_folder=dist if dist.is_dir() else None, static_url_path="")
     if app.static_folder:
         app.add_url_rule("/", "index", lambda: app.send_static_file("index.html"))
+
+    def is_guest() -> bool:
+        return guests is not None and request.headers.get(USER_HEADER) == guests.policy.user
+
+    @app.before_request
+    def refuse_blocked_guests() -> tuple[Response, int] | None:
+        if guests is not None and is_guest() and guests.blocked(_client_address()):
+            return jsonify({"error": BLOCKED_MESSAGE}), 403
+        return None
+
+    def admit_guest() -> tuple[Response, int] | None:
+        """Count a guest's question, or the 429 refusing it; other users pass untouched."""
+        if guests is None or not is_guest():
+            return None
+        session = request.cookies.get(SESSION_COOKIE)
+        if not session:
+            session = secrets.token_urlsafe(16)
+
+            @after_this_request
+            def remember(response: Response) -> Response:
+                https = request.headers.get("X-Forwarded-Proto") == "https"
+                response.set_cookie(
+                    SESSION_COOKIE, session, httponly=True, samesite="Strict", secure=https
+                )
+                return response
+
+        refusal = guests.admit(_client_address(), session)
+        if refusal is None:
+            return None
+        status = 403 if refusal == BLOCKED_MESSAGE else 429
+        return jsonify({"error": refusal}), status
 
     @app.get("/api/health")
     def health() -> Response:
@@ -242,6 +294,9 @@ def create_app(catalog: Catalog, client: LLMClient, http: HTTP = requests) -> Fl
             return jsonify({"error": "question is required"}), 400
         if len(question) > MAX_QUESTION_CHARS:
             return jsonify({"error": f"question exceeds {MAX_QUESTION_CHARS} characters"}), 400
+        refused = admit_guest()
+        if refused is not None:
+            return refused
         tools = catalog.tools()
         if not tools:
             return jsonify({"error": "no tool service is available", "tools": []}), 503
@@ -287,7 +342,9 @@ def main(host: str | None = None, port: int | None = None, model: str | None = N
     """
     configure_logging()
     urls = os.environ.get("FOURTHDOWN_SERVICES", DEFAULT_SERVICES).split(",")
-    app = create_app(Catalog(urls, requests), default_client(model))
+    policy = GuestPolicy.from_env()
+    guests = None if policy is None else GuestLimiter(policy)
+    app = create_app(Catalog(urls, requests), default_client(model), guests=guests)
     serve(app, host=host, port=port, default_port=PORT)
 
 
