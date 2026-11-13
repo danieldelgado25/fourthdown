@@ -18,6 +18,8 @@ TARGETS = $(SERVICES) pipeline
 
 # POSTGRES_PASSWORD (and the LLM endpoint) come from .env; see .env.example.
 -include .env
+# Credentials from .env reach helm as shell variables, so make echoes their names, not their values.
+export POSTGRES_PASSWORD FOURTHDOWN_LLM_BASE_URL FOURTHDOWN_LLM_MODEL FOURTHDOWN_LLM_API_KEY
 
 .PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	eval-routing scorecard scorecard-ci lineage verify-data mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
 
@@ -116,7 +118,10 @@ kind-load: images
 
 k8s-deploy:
 	helm upgrade --install $(RELEASE) $(CHART) -f $(CHART)/values-kind.yaml \
-		--set postgres.password="$(POSTGRES_PASSWORD)" $(HELM_ARGS)
+		--set postgres.password="$$POSTGRES_PASSWORD" \
+		$${FOURTHDOWN_LLM_BASE_URL:+--set llm.baseUrl="$$FOURTHDOWN_LLM_BASE_URL" \
+		--set llm.model="$$FOURTHDOWN_LLM_MODEL" --set llm.apiKey="$$FOURTHDOWN_LLM_API_KEY"} \
+		$(HELM_ARGS)
 
 k8s-test:
 	helm test $(RELEASE) --logs
