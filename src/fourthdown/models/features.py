@@ -225,7 +225,15 @@ def split_by_season(
 
     def slice_for(name: str, seasons: Sequence[int]) -> Split:
         wanted = set(int(season) for season in seasons)
-        return Split(name=name, frame=usable.filter(pl.col("season").is_in(wanted)))
+        split = Split(name=name, frame=usable.filter(pl.col("season").is_in(wanted)))
+        if not len(split):
+            available = sorted(set(usable["season"].to_list()))
+            raise ValueError(
+                f"no usable rows for the {name} seasons {sorted(wanted)}; the data has "
+                f"{available}. Choose a split inside it (fourthdown train --train-seasons "
+                "--valid-seasons --test-seasons)."
+            )
+        return split
 
     return Dataset(
         features=tuple(features),

@@ -110,6 +110,13 @@ def test_feature_matrix_reports_missing_columns(plays: pl.DataFrame) -> None:
         features.feature_matrix(plays, ["not_a_column"])
 
 
+def test_split_outside_the_data_fails_by_name(plays: pl.DataFrame) -> None:
+    with pytest.raises(ValueError, match=r"no usable rows for the train seasons \[2001\]"):
+        features.split_by_season(
+            plays, features.WP_FEATURES, "posteam_won", train=(2001,), valid=(2019,), test=(2021,)
+        )
+
+
 def test_split_drops_rows_with_missing_features(plays: pl.DataFrame) -> None:
     holed = plays.with_columns(
         pl.when(pl.col("play_id") == 0.0)
