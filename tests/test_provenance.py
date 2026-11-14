@@ -76,6 +76,14 @@ def test_verify_catches_an_edited_partition(raw_frame, tmp_paths):
     assert any("changed since" in problem for problem in provenance.verify(tmp_paths))
 
 
+def test_verify_catches_a_view_whose_sql_changed(raw_frame, tmp_paths, monkeypatch):
+    # A pipeline that only checks data files would keep serving the old view.
+    _build(raw_frame, tmp_paths)
+    edited = {**warehouse.VIEW_SQL, "games": warehouse.VIEW_SQL["games"] + " -- edited"}
+    monkeypatch.setattr(warehouse, "VIEW_SQL", edited)
+    assert provenance.verify(tmp_paths) == ["view games: SQL changed since; rerun warehouse"]
+
+
 def test_verify_reports_an_empty_manifest(tmp_paths):
     assert provenance.verify(tmp_paths)
 

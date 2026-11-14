@@ -274,6 +274,11 @@ def verify(paths: Paths) -> list[str]:
             problems.append(f"processed {season}: built from a different raw file; rerun etl")
         if partition.transform_sha256 != current_transform:
             problems.append(f"processed {season}: transform code changed since; rerun etl")
+    from fourthdown.data.warehouse import VIEW_SQL  # warehouse imports this module
+
+    for name, record in sorted(manifest.views.items()):
+        if name in VIEW_SQL and record.sql_sha256 != sha256_text(VIEW_SQL[name].strip()):
+            problems.append(f"view {name}: SQL changed since; rerun warehouse")
     return problems
 
 
