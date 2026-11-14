@@ -78,3 +78,24 @@ def test_cli_succeeds_when_data_is_present(tmp_paths: Paths) -> None:
 
 def test_cli_requires_a_check() -> None:
     assert runner.invoke(app, ["wait"]).exit_code != 0
+
+
+def test_ollama_check_asks_ollama_not_the_chat_endpoint(monkeypatch) -> None:
+    monkeypatch.setenv("FOURTHDOWN_LLM_BASE_URL", "https://hosted.example/v1")
+    asked: list[str] = []
+
+    class Tags:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"models": [{"name": "nomic-embed-text:latest"}]}
+
+    def get(url: str, **_: object) -> Tags:
+        asked.append(url)
+        return Tags()
+
+    monkeypatch.setattr(wait.requests, "get", get)
+    assert wait.ollama_check("nomic-embed-text", "http://ollama:11434")() is None
+    assert wait.ollama_check("qwen2.5-coder:7b", "http://ollama:11434")() is not None
+    assert asked == ["http://ollama:11434/api/tags"] * 2

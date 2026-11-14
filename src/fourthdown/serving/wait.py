@@ -8,15 +8,17 @@ is not ready yet, or None, so a timeout says exactly what never came up.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections.abc import Callable, Mapping
 
 import psycopg
+import requests
 
 from fourthdown.config import Paths
-from fourthdown.llm import ChatClient
 from fourthdown.models.card import MODEL_CARD
 from fourthdown.retrieval import DocumentStore
+from fourthdown.retrieval.embed import DEFAULT_HOST
 from fourthdown.retrieval.store import StoreError
 
 LOGGER = logging.getLogger(__name__)
@@ -36,11 +38,21 @@ def data_check(paths: Paths) -> Check:
     return check
 
 
-def ollama_check(model: str, base_url: str | None = None) -> Check:
-    client = ChatClient(model, base_url=base_url)
+def ollama_check(model: str, host: str | None = None) -> Check:
+    """Ollama itself has pulled ``model``: embeddings come from Ollama even when
+    ``FOURTHDOWN_LLM_BASE_URL`` sends chat to a hosted API, whose key Ollama never sees."""
+    root = (host or os.environ.get("OLLAMA_HOST", DEFAULT_HOST)).rstrip("/")
 
     def check() -> str | None:
-        return None if client.available() else f"LLM at {client.base_url} has no {model}"
+        try:
+            response = requests.get(f"{root}/api/tags", timeout=5)
+            response.raise_for_status()
+            names = {str(entry.get("name", "")) for entry in response.json().get("models", [])}
+        except (requests.RequestException, ValueError, AttributeError):
+            return f"Ollama at {root} is unreachable"
+        if model in names or f"{model}:latest" in names:
+            return None
+        return f"Ollama at {root} has no {model}"
 
     return check
 
