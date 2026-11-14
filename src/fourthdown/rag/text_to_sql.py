@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import duckdb
 
 from fourthdown.llm import LLMClient
-from fourthdown.rag import schema_card
+from fourthdown.rag import names, schema_card
 from fourthdown.sql import guard
 
 LOGGER = logging.getLogger(__name__)
@@ -72,13 +72,13 @@ PROMPT = """{card}
 {examples}
 
 Question: {question}
-
+{players}
 SQL:"""
 
 REPAIR = """{card}
 
 Question: {question}
-
+{players}
 These queries failed, most recent last:
 {failures}
 {hint}
@@ -172,6 +172,7 @@ class TextToSQL:
         self._max_rows = max_rows
         self._card = schema_card.build(connection)
         self._view_columns = schema_card.view_columns(connection)
+        self._names = names.NameResolver(names.load_roster(connection))
 
     @property
     def schema_card(self) -> str:
@@ -201,13 +202,18 @@ class TextToSQL:
             )
         return hint
 
-    def _generate(self, question: str, failures: list[Attempt], temperature: float) -> str:
+    def _generate(
+        self, question: str, players: str, failures: list[Attempt], temperature: float
+    ) -> str:
         prompt = (
-            PROMPT.format(card=self._card, examples=render_examples(), question=question)
+            PROMPT.format(
+                card=self._card, examples=render_examples(), question=question, players=players
+            )
             if not failures
             else REPAIR.format(
                 card=self._card,
                 question=question,
+                players=players,
                 failures="\n".join(
                     f"SQL: {failed.sql}\nError: {failed.error}" for failed in failures
                 ),
@@ -229,13 +235,14 @@ class TextToSQL:
     def answer(self, question: str) -> SQLAnswer:
         started = time.perf_counter()
         attempts: list[Attempt] = []
+        players = names.hint(self._names.resolve(question))
         for attempt_number in range(1, self._max_attempts + 1):
             temperature = (
                 0.0
                 if not attempts
                 else REPAIR_TEMPERATURES[min(attempt_number - 2, len(REPAIR_TEMPERATURES) - 1)]
             )
-            raw = self._generate(question, attempts, temperature)
+            raw = self._generate(question, players, attempts, temperature)
             if raw == UNANSWERABLE:
                 return SQLAnswer(
                     question=question,
