@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import duckdb
 import polars as pl
 import pytest
@@ -75,6 +77,19 @@ def test_build_requires_processed_partitions(tmp_paths):
 def test_connect_requires_a_built_warehouse(tmp_paths):
     with pytest.raises(FileNotFoundError, match="warehouse missing"):
         warehouse.connect(tmp_paths)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot replace an open file")
+def test_rebuild_succeeds_while_a_reader_holds_the_warehouse(raw_frame, tmp_paths):
+    # The pipeline Job rebuilds while the warehouse service has the file open read-only.
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    warehouse.build(tmp_paths)
+    with warehouse.connect(tmp_paths) as reader:
+        warehouse.build(tmp_paths)
+        assert reader.execute("SELECT count(*) FROM games").fetchone() == (1,)
+    with warehouse.connect(tmp_paths) as connection:
+        assert connection.execute("SELECT count(*) FROM games").fetchone() == (1,)
 
 
 def test_warehouse_survives_moving_the_data_root(raw_frame, tmp_path):

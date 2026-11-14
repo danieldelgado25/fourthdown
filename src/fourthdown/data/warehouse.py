@@ -205,10 +205,15 @@ def build(paths: Paths | None = None, *, database: Path | None = None) -> Path:
         )
     target = database or resolved.database
     target.parent.mkdir(parents=True, exist_ok=True)
-    with duckdb.connect(str(target)) as connection:
+    # Build beside the live file and swap it in: a running warehouse service holds a
+    # read-only lock on the live one, which a writer cannot take but a rename never needs.
+    staging = target.with_name(f"{target.name}.building")
+    staging.unlink(missing_ok=True)
+    with duckdb.connect(str(staging)) as connection:
         create_views(connection, resolved)
         rows = connection.execute("SELECT count(*) FROM plays").fetchone()
         LOGGER.info("warehouse at %s covers %s plays in %d seasons", target, rows, len(partitions))
+    staging.replace(target)
     manifest = provenance.record_views(resolved, VIEW_SQL, VIEW_READS)
     LOGGER.info("data version %s", manifest.data_version)
     return target
