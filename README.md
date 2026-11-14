@@ -359,7 +359,7 @@ src/fourthdown/
     provenance.py     per-file SHA-256, table lineage, data_version, drift checks
     schema.py         the processed column contract, including the leakage list
     etl.py            lazy Polars pipeline -> season-partitioned Parquet
-    warehouse.py      DuckDB views: plays, games, drives, team_game, player_game
+    warehouse.py      DuckDB views: plays, games, drives, team_game, player_game, players
     audit.py          validation checks + the generated audit report
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
   narrative/
@@ -373,6 +373,7 @@ src/fourthdown/
   rag/
     schema_card.py    the prompt's view/column/semantics card, read from the live catalog
     text_to_sql.py    generate -> validate -> execute, with repair-on-error
+    names.py          match player names in a question to player_ids before SQL is written
   llm/client.py       any OpenAI-compatible chat API behind a one-method protocol
   models/
     features.py       leakage-safe design matrices and season-disjoint splits

@@ -33,15 +33,16 @@ authoring, and explanation.
 
 ```
 data/raw/pbp/play_by_play_<season>.parquet      nflverse release, untouched
+data/raw/players.parquet                         nflverse player ids -> full names
 data/processed/plays/season=<season>/plays.parquet   projected, typed, feature-derived
-data/warehouse/fourthdown.duckdb                 five views over the partitions
+data/warehouse/fourthdown.duckdb                 six views over the partitions
 ```
 
 One lazy Polars plan per season does projection, type normalisation, and feature
 derivation; partitions are written independently so a new season is an incremental
 `fourthdown build --seasons 2025` rather than a full rebuild.
 
-The five views (`plays`, `games`, `drives`, `team_game`, `player_game`) are the entire
+The six views (`plays`, `games`, `drives`, `team_game`, `player_game`, `players`) are the entire
 surface the query layer sees. This is a deliberate text-to-SQL decision: a model asked to
 write SQL against `team_game` rarely invents a join, while a model handed 372 raw columns
 invents one constantly. Anything the views cannot express is a signal to add a view, not
@@ -63,8 +64,14 @@ prompt. `plays` is trimmed to a curated subset rather than dumped whole; the car
 under ~5k characters, which leaves room for the question and a repair round inside a small
 local context window.
 
+**Player names are resolved before the model sees the question.** The plays store
+abbreviations like `J.Smith-Njigba`, and 197 of them are shared by several players.
+`rag/names.py` matches the question against the full names from nflverse's player table
+(hyphens, possessives, suffixes and one typo tolerated) and lists each match's
+`player_id` with the prompt; a shared name lists every candidate with its teams and seasons.
+
 **The guard is a parser, not a regex.** sqlglot parses the statement and rejects anything
-that is not exactly one read-only query, references a relation outside the five views,
+that is not exactly one read-only query, references a relation outside the six views,
 or calls a filesystem function (`read_parquet`, `glob`, ...). A `LIMIT` is inserted when
 absent and tightened when it is too large. Execution then happens on a read-only
 connection, so the guard is a second line of defence rather than the only one.
