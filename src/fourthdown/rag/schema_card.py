@@ -75,9 +75,7 @@ COLUMN_NOTES: dict[str, str] = {
     "drive_result": "how the drive ended, e.g. 'Touchdown', 'Punt', 'Field goal', 'Turnover'",
     **dict.fromkeys(
         ("passer_player_name", "rusher_player_name", "receiver_player_name", "player_name"),
-        "abbreviated, never the full name: 'P.Mahomes', 'J.Smith-Njigba', sometimes two "
-        "initials ('Ja.Williams'). Match a named player with ILIKE '<first initial>%.<surname>', "
-        "e.g. ILIKE 'J%.Smith-Njigba' for Jaxon Smith-Njigba",
+        "abbreviated, e.g. 'J.Smith-Njigba'; see the player-name rule",
     ),
 }
 
@@ -169,6 +167,9 @@ Rules:
 - Team abbreviations are the current ones for all history: use LAC (not SD), LA (not
   STL), LV (not OAK), JAX, WAS, ARI.
 - The season is the year it started: the February 2024 Super Bowl is season 2023.
+- Player names are never stored in full: 'P.Mahomes', sometimes 'Ja.Williams'. Match a
+  named player with ILIKE '<first initial>%.<surname>': Jaxon Smith-Njigba is
+  ILIKE 'J%.Smith-Njigba'.
 - Filter on every team, season, down, and situation the question names.
 - Count plays with count(*) on plays; only the other views have a `plays` column.
 - team_game and player_game rates are per game. For a team's season rate, compute it
