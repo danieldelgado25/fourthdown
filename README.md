@@ -313,8 +313,17 @@ make k8s-test                     # helm test: health, advice, routing, a win pr
 make kind-down
 ```
 
-`POSTGRES_PASSWORD` comes from `.env`. `HELM_ARGS="--set pipeline.seasons=2022-2024
---set llm.model=qwen2.5-coder:1.5b"` makes a quick, small cluster. Postgres and Ollama
+`POSTGRES_PASSWORD` comes from `.env`, and so do `FOURTHDOWN_LLM_BASE_URL`,
+`FOURTHDOWN_LLM_MODEL`, and `FOURTHDOWN_LLM_API_KEY` when set. A quick, small cluster:
+
+```bash
+make k8s-deploy HELM_ARGS="--set pipeline.seasons=2022-2024 \
+  --set pipeline.trainArgs='--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024' \
+  --set llm.model=qwen2.5-coder:1.5b"
+```
+
+The training split must fall inside `pipeline.seasons`; the default trains on 2009-2018.
+Postgres and Ollama
 can be external (`postgres.enabled=false` with `postgres.externalDsn`,
 `ollama.enabled=false` with `ollama.externalUrl`), and `llm.baseUrl` / `llm.apiKey` point
 the chat model at any OpenAI-compatible endpoint. With no LLM at all, the chart skips the
