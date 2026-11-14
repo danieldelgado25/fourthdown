@@ -1,6 +1,6 @@
 """DuckDB semantic layer over the processed Parquet partitions.
 
-These five views are the only surface the query layer (and later the text-to-SQL prompt)
+These views are the only surface the query layer (and later the text-to-SQL prompt)
 sees. Keeping the vocabulary small and pre-joined is what makes generated SQL correct
 often enough to be useful: a model asked to reason about ``team_game`` rarely invents a
 join, whereas a model handed 372 raw columns invents one constantly.
@@ -18,11 +18,26 @@ from fourthdown.data import provenance
 
 LOGGER = logging.getLogger(__name__)
 
-VIEW_NAMES: tuple[str, ...] = ("plays", "games", "drives", "team_game", "player_game")
+VIEW_NAMES: tuple[str, ...] = ("plays", "games", "drives", "team_game", "player_game", "players")
 
 PLAYS_VIEW = """
 CREATE OR REPLACE VIEW plays AS
 SELECT * FROM read_parquet('{glob}')
+"""
+
+# The play-by-play only carries abbreviated names ('J.Smith-Njigba'), many shared, plus ids.
+PLAYERS_VIEW = """
+CREATE OR REPLACE VIEW players AS
+SELECT gsis_id AS player_id, display_name AS full_name, position
+FROM read_parquet('{path}')
+WHERE gsis_id IS NOT NULL
+"""
+
+# Until the players file is downloaded, so a warehouse still builds offline.
+NO_PLAYERS_VIEW = """
+CREATE OR REPLACE VIEW players AS
+SELECT NULL::VARCHAR AS player_id, NULL::VARCHAR AS full_name, NULL::VARCHAR AS position
+WHERE false
 """
 
 GAMES_VIEW = """
@@ -117,6 +132,7 @@ GROUP BY game_id, posteam
 # (`touchdown` alone also fires on the defence's pick-six or fumble return).
 PLAYER_GAME_VIEW = """
 CREATE OR REPLACE VIEW player_game AS
+WITH roles AS (
 SELECT
     game_id, season, week, posteam AS team, 'passer' AS role,
     passer_player_id AS player_id, passer_player_name AS player_name,
@@ -152,24 +168,35 @@ SELECT
 FROM plays
 WHERE receiver_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
 GROUP BY ALL
+)
+SELECT roles.*, players.full_name
+FROM roles LEFT JOIN players USING (player_id)
 """
 
-VIEW_STATEMENTS: tuple[str, ...] = (
-    GAMES_VIEW,
-    DRIVES_VIEW,
-    TEAM_GAME_VIEW,
-    PLAYER_GAME_VIEW,
-)
-
-
+# Creation order: every view after the ones it reads.
 VIEW_SQL: dict[str, str] = {
     "plays": PLAYS_VIEW,
-    **dict(zip(VIEW_NAMES[1:], VIEW_STATEMENTS, strict=True)),
+    "players": PLAYERS_VIEW,
+    "games": GAMES_VIEW,
+    "drives": DRIVES_VIEW,
+    "team_game": TEAM_GAME_VIEW,
+    "player_game": PLAYER_GAME_VIEW,
 }
 VIEW_READS: dict[str, tuple[str, ...]] = {
     "plays": (provenance.PROCESSED_SOURCE,),
-    **{name: ("plays",) for name in VIEW_NAMES[1:]},
+    "players": (provenance.PLAYERS_SOURCE,),
+    "games": ("plays",),
+    "drives": ("plays",),
+    "team_game": ("plays",),
+    "player_game": ("plays", "players"),
 }
+
+
+def view_sql(paths: Paths) -> dict[str, str]:
+    """The SQL each view is built from on this data root."""
+    if paths.players.exists():
+        return VIEW_SQL
+    return {**VIEW_SQL, "players": NO_PLAYERS_VIEW}
 
 
 def processed_glob(paths: Paths) -> str:
@@ -189,9 +216,9 @@ def _anchor(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
 def create_views(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
     """Define every view against the processed partitions of ``paths``."""
     _anchor(connection, paths)
-    connection.execute(PLAYS_VIEW.format(glob=processed_glob(paths)))
-    for statement in VIEW_STATEMENTS:
-        connection.execute(statement)
+    players = paths.players.relative_to(paths.root).as_posix()
+    for sql in view_sql(paths).values():
+        connection.execute(sql.format(glob=processed_glob(paths), path=players))
 
 
 def build(paths: Paths | None = None, *, database: Path | None = None) -> Path:
@@ -214,7 +241,7 @@ def build(paths: Paths | None = None, *, database: Path | None = None) -> Path:
         rows = connection.execute("SELECT count(*) FROM plays").fetchone()
         LOGGER.info("warehouse at %s covers %s plays in %d seasons", target, rows, len(partitions))
     staging.replace(target)
-    manifest = provenance.record_views(resolved, VIEW_SQL, VIEW_READS)
+    manifest = provenance.record_views(resolved, view_sql(resolved), VIEW_READS)
     LOGGER.info("data version %s", manifest.data_version)
     return target
 

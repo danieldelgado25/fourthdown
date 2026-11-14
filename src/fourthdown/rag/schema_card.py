@@ -30,6 +30,7 @@ VIEW_PURPOSE: dict[str, str] = {
         "figures need GROUP BY player_name with sum(), and play minimums go in "
         "HAVING sum(plays) >= N."
     ),
+    "players": "Every player nflverse knows; join on player_id.",
 }
 
 # Only the columns whose meaning is not obvious from the name, or that are easy to misuse.
@@ -75,7 +76,7 @@ COLUMN_NOTES: dict[str, str] = {
     "drive_result": "how the drive ended, e.g. 'Touchdown', 'Punt', 'Field goal', 'Turnover'",
     **dict.fromkeys(
         ("passer_player_name", "rusher_player_name", "receiver_player_name", "player_name"),
-        "abbreviated, e.g. 'J.Smith-Njigba'; see the player-name rule",
+        "abbreviated, not unique: 'J.Smith-Njigba'",
     ),
 }
 
@@ -167,9 +168,8 @@ Rules:
 - Team abbreviations are the current ones for all history: use LAC (not SD), LA (not
   STL), LV (not OAK), JAX, WAS, ARI.
 - The season is the year it started: the February 2024 Super Bowl is season 2023.
-- Player names are never stored in full: 'P.Mahomes', sometimes 'Ja.Williams'. Match a
-  named player with ILIKE '<first initial>%.<surname>': Jaxon Smith-Njigba is
-  ILIKE 'J%.Smith-Njigba'.
+- Filter a named player on the player_id listed with the question (plays:
+  passer_player_id, rusher_player_id, receiver_player_id). Failing that, on full_name.
 - Filter on every team, season, down, and situation the question names.
 - Count plays with count(*) on plays; only the other views have a `plays` column.
 - team_game and player_game rates are per game. For a team's season rate, compute it

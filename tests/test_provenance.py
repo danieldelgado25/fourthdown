@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import polars as pl
 from typer.testing import CliRunner
 
 from fourthdown.cli import app
@@ -82,6 +83,17 @@ def test_verify_catches_a_view_whose_sql_changed(raw_frame, tmp_paths, monkeypat
     edited = {**warehouse.VIEW_SQL, "games": warehouse.VIEW_SQL["games"] + " -- edited"}
     monkeypatch.setattr(warehouse, "VIEW_SQL", edited)
     assert provenance.verify(tmp_paths) == ["view games: SQL changed since; rerun warehouse"]
+
+
+def test_verify_catches_a_players_file_that_arrived_or_changed(raw_frame, tmp_paths):
+    _build(raw_frame, tmp_paths)
+    players = pl.DataFrame({"gsis_id": ["X"], "display_name": ["A B"], "position": ["QB"]})
+    players.write_parquet(tmp_paths.players)
+    assert provenance.verify(tmp_paths) == ["view players: SQL changed since; rerun warehouse"]
+    warehouse.build(tmp_paths)
+    assert provenance.verify(tmp_paths) == []
+    players.with_columns(display_name=pl.lit("C D")).write_parquet(tmp_paths.players)
+    assert any(problem.startswith("players:") for problem in provenance.verify(tmp_paths))
 
 
 def test_verify_reports_an_empty_manifest(tmp_paths):

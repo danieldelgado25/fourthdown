@@ -119,6 +119,7 @@ def ingest_cmd(
     paths = data_paths(data_dir)
     wanted = ingest.parse_seasons(seasons, latest=_latest_season())
     downloaded = list(ingest.download_seasons(wanted, paths, force=force))
+    ingest.download_players(paths, force=force)
     typer.echo(f"{len(downloaded)} season files available in {paths.raw}")
 
 
@@ -761,6 +762,7 @@ def build(
     paths = data_paths(data_dir)
     wanted = ingest.parse_seasons(seasons, latest=_latest_season())
     list(ingest.download_seasons(wanted, paths))
+    ingest.download_players(paths)
     list(etl.transform_seasons(wanted, paths))
     target = warehouse.build(paths)
     typer.echo(f"built {len(wanted)} seasons into {target}")

@@ -21,6 +21,7 @@ LOGGER = logging.getLogger(__name__)
 RELEASE_URL = (
     "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{season}.parquet"
 )
+PLAYERS_URL = "https://github.com/nflverse/nflverse-data/releases/download/players/players.parquet"
 CHUNK_SIZE = 1 << 20
 TIMEOUT = 120
 
@@ -76,9 +77,18 @@ def download_season(season: int, paths: Paths, *, force: bool = False) -> Path:
         provenance.record_raw(paths, season, url=url, downloaded=False)
         return destination
 
+    LOGGER.info("downloading season %s from %s", season, url)
+    etag, last_modified = _fetch(url, destination)
+    provenance.record_raw(
+        paths, season, url=url, downloaded=True, etag=etag, last_modified=last_modified
+    )
+    return destination
+
+
+def _fetch(url: str, destination: Path) -> tuple[str | None, str | None]:
+    """Stream ``url`` to ``destination`` atomically, returning its ETag and Last-Modified."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(".parquet.part")
-    LOGGER.info("downloading season %s from %s", season, url)
     with requests.get(url, stream=True, timeout=TIMEOUT) as response:
         response.raise_for_status()
         with partial.open("wb") as handle:
@@ -87,9 +97,20 @@ def download_season(season: int, paths: Paths, *, force: bool = False) -> Path:
         etag = response.headers.get("ETag")
         last_modified = response.headers.get("Last-Modified")
     partial.replace(destination)
-    provenance.record_raw(
-        paths, season, url=url, downloaded=True, etag=etag, last_modified=last_modified
-    )
+    return etag, last_modified
+
+
+def download_players(paths: Paths, *, force: bool = False) -> Path:
+    """Fetch nflverse's player table, which maps the play-by-play ids to full names.
+
+    The warehouse records its hash, so a later download shows up as drift.
+    """
+    destination = paths.players
+    if destination.exists() and not force:
+        LOGGER.info("players already present at %s", destination)
+        return destination
+    LOGGER.info("downloading players from %s", PLAYERS_URL)
+    _fetch(PLAYERS_URL, destination)
     return destination
 
 

@@ -9,9 +9,10 @@ Each step records what it wrote into one manifest at ``Paths.manifest``:
 * ``processed``: each season partition, its row count, its SHA-256, the hash of the raw
   file it was derived from, and the hash of the transform code that derived it.
 * ``views``: each DuckDB view, the hash of its SQL, and what it reads.
+* ``players_sha256``: the nflverse player table the ``players`` view read, if any.
 
-``data_version`` folds the processed hashes and view SQL into one short id. A training
-run logs it, the model card carries it, and the serving API returns it with every
+``data_version`` folds the processed hashes, players file, and view SQL into one short id.
+A training run logs it, the model card carries it, and the serving API returns it with every
 prediction, so a probability can be traced back to the exact bytes it was trained on.
 """
 
@@ -32,6 +33,7 @@ CHUNK_SIZE = 1 << 20
 DATA_VERSION_CHARS = 12
 TRANSFORM_SOURCES = ("etl.py", "schema.py")
 PROCESSED_SOURCE = "processed partitions"
+PLAYERS_SOURCE = "nflverse players"
 
 
 def sha256_file(path: Path) -> str:
@@ -110,6 +112,7 @@ class Manifest:
     raw: dict[int, RawRecord] = field(default_factory=dict)
     processed: dict[int, PartitionRecord] = field(default_factory=dict)
     views: dict[str, ViewRecord] = field(default_factory=dict)
+    players_sha256: str | None = None
     package_version: str = __version__
     git_commit: str | None = None
     updated_at: str | None = None
@@ -139,6 +142,7 @@ class Manifest:
                 str(season): asdict(record) for season, record in sorted(self.processed.items())
             },
             "views": {name: asdict(record) for name, record in self.views.items()},
+            "players_sha256": self.players_sha256,
         }
         return json.dumps(payload, indent=2) + "\n"
 
@@ -158,6 +162,7 @@ class Manifest:
                 for key, record in payload.get("processed", {}).items()
             },
             views=views,
+            players_sha256=payload.get("players_sha256"),
             package_version=str(payload.get("package_version", __version__)),
             git_commit=payload.get("git_commit"),
             updated_at=payload.get("updated_at"),
@@ -243,6 +248,7 @@ def record_views(
         name: ViewRecord(name=name, sql_sha256=sha256_text(sql.strip()), reads=reads[name])
         for name, sql in statements.items()
     }
+    manifest.players_sha256 = sha256_file(paths.players) if paths.players.exists() else None
     on_disk = {season for season in manifest.processed if paths.season_processed(season).exists()}
     manifest.processed = {season: manifest.processed[season] for season in sorted(on_disk)}
     save(paths, manifest)
@@ -274,10 +280,15 @@ def verify(paths: Paths) -> list[str]:
             problems.append(f"processed {season}: built from a different raw file; rerun etl")
         if partition.transform_sha256 != current_transform:
             problems.append(f"processed {season}: transform code changed since; rerun etl")
-    from fourthdown.data.warehouse import VIEW_SQL  # warehouse imports this module
+    if manifest.players_sha256 and (
+        not paths.players.exists() or sha256_file(paths.players) != manifest.players_sha256
+    ):
+        problems.append("players: file changed since the warehouse read it; rerun warehouse")
+    from fourthdown.data.warehouse import view_sql  # warehouse imports this module
 
+    current = view_sql(paths)
     for name, record in sorted(manifest.views.items()):
-        if name in VIEW_SQL and record.sql_sha256 != sha256_text(VIEW_SQL[name].strip()):
+        if name in current and record.sql_sha256 != sha256_text(current[name].strip()):
             problems.append(f"view {name}: SQL changed since; rerun warehouse")
     return problems
 

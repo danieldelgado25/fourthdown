@@ -64,6 +64,20 @@ def test_player_game_follows_box_score_conventions(raw_frame, tmp_paths):
     assert row == (3, 20, 1)
 
 
+def test_player_game_carries_the_full_name_from_the_players_file(raw_frame, tmp_paths):
+    frame = raw_frame.head(1).with_columns(
+        passer_player_id=pl.lit("00-0033873"), passer_player_name=pl.lit("P.Mahomes")
+    )
+    frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    players = {"gsis_id": ["00-0033873"], "display_name": ["Patrick Mahomes"], "position": ["QB"]}
+    pl.DataFrame(players).write_parquet(tmp_paths.players)
+    with duckdb.connect(":memory:") as connection:
+        warehouse.create_views(connection, tmp_paths)
+        row = connection.execute("SELECT player_name, full_name FROM player_game").fetchone()
+    assert row == ("P.Mahomes", "Patrick Mahomes")
+
+
 def test_drives_view_aggregates_by_drive(connection):
     row = connection.execute("SELECT plays, start_yardline_100 FROM drives WHERE posteam = 'BBB'")
     assert row.fetchone() == (3, 75)

@@ -24,6 +24,10 @@ class Paths:
         return self.root / "raw" / "pbp"
 
     @property
+    def players(self) -> Path:
+        return self.root / "raw" / "players.parquet"
+
+    @property
     def processed(self) -> Path:
         return self.root / "processed" / "plays"
 
