@@ -73,6 +73,12 @@ COLUMN_NOTES: dict[str, str] = {
     "role": "'passer', 'rusher', or 'receiver'",
     "cpoe": "completion percentage over expected, passers only",
     "drive_result": "how the drive ended, e.g. 'Touchdown', 'Punt', 'Field goal', 'Turnover'",
+    **dict.fromkeys(
+        ("passer_player_name", "rusher_player_name", "receiver_player_name", "player_name"),
+        "abbreviated, never the full name: 'P.Mahomes', 'J.Smith-Njigba', sometimes two "
+        "initials ('Ja.Williams'). Match a named player with ILIKE '<first initial>%.<surname>', "
+        "e.g. ILIKE 'J%.Smith-Njigba' for Jaxon Smith-Njigba",
+    ),
 }
 
 # Same name, different meaning once aggregated.
