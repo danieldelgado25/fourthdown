@@ -130,7 +130,8 @@ def test_drives_scored_touchdown_ignores_opponent_return_touchdowns():
             """
             CREATE TABLE plays AS SELECT
                 drive_id, play_id, fixed_drive_result, touchdown,
-                'g' AS game_id, 2023 AS season, 1 AS week, 'AAA' AS posteam,
+                'g' AS game_id, 2023 AS season, 'REG' AS season_type, 1 AS week,
+                'AAA' AS posteam,
                 'BBB' AS defteam, 1 AS fixed_drive, 1 AS qtr, 50 AS yardline_100,
                 100.0 AS game_seconds_remaining, TRUE AS is_designed_play,
                 5 AS yards_gained, FALSE AS first_down, 0.1 AS epa

@@ -5,6 +5,11 @@
   {"question": "Compare red zone touchdown rate for the Chiefs and the Bills in 2022", "tool": "stats"},
   {"question": "How many plays are in the warehouse?", "tool": "stats"},
   {"question": "Who led the league in rushing yards in 2019?", "tool": "stats"},
+  {"question": "Who did the Patriots play week 1 of the 2016 NFL season?", "tool": "stats"},
+  {"question": "What was the score of the 2018 Chiefs vs Rams game?", "tool": "stats"},
+  {"question": "How many catches did Chad Ochocinco have in 2010?", "tool": "stats"},
+  {"question": "How many total points were scored in Super Bowl LIII?", "tool": "stats"},
+  {"question": "How many passing yards did Patrick Mahomes have in the 2022 playoffs?", "tool": "stats"},
 
   {"question": "What happened in the 2017 Super Bowl between the Patriots and the Falcons?", "tool": "narrative"},
   {"question": "Tell me about the Vikings' last drive in the 2017 divisional round", "tool": "narrative"},

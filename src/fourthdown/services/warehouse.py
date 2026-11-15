@@ -89,9 +89,10 @@ class StatsTool:
 
     name = "stats"
     description = (
-        "Counts, rates, totals, leaders, and any question whose answer is a number or a "
-        "ranking computed over the play-by-play table (2009-2024). Use for 'how many', "
-        "'which team led', 'what rate', 'compare X and Y'."
+        "Counts, rates, totals, leaders, player stat lines, and any question whose answer "
+        "is a number or a ranking computed over the play-by-play table (2009-2024). Also "
+        "game facts: final scores, who played whom and in which week, venue, weather. Use "
+        "for 'how many', 'which team led', 'what was the score', 'who did X play in week N'."
     )
 
     def __init__(self, chain: TextToSQL, *, max_rows: int = 50) -> None:
@@ -103,7 +104,7 @@ class StatsTool:
         answer = self._chain.answer(question)
         if answer.unanswerable:
             return Evidence(
-                answer="The warehouse does not hold the data that question needs.",
+                answer=answer.note or "The warehouse does not hold the data that question needs.",
                 failed=True,
             )
         if not answer.ok or answer.sql is None:
@@ -113,8 +114,11 @@ class StatsTool:
                 failed=True,
             )
         rows = [list(row) for row in answer.rows[: self._max_rows]]
+        empty = all(value is None for row in rows for value in row)
+        no_rows = "No rows matched. Check the spelling of names and that the filters fit 2009-2024."
+        headline = (answer.note or no_rows) if empty else summarise(answer.columns, rows)
         return Evidence(
-            answer=summarise(answer.columns, rows),
+            answer=headline,
             table=Table(columns=answer.columns, rows=rows),
             detail={"sql": answer.sql, "attempts": str(len(answer.attempts))},
         )

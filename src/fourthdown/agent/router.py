@@ -56,6 +56,16 @@ NARRATIVE_PATTERNS = (
     r"\bsuper bowl\b",
     r"\b(comeback|collapse|upset|meltdown)\b",
 )
+# Game facts the games view holds exactly; checked before the narrative cues, so "what was
+# the score of the Super Bowl" is a lookup rather than a search over summaries.
+STATS_PATTERNS = (
+    r"\b(final )?score (of|in|for)\b",
+    r"\bwhat was the (final )?score\b",
+    r"\bwho did\b.*\bplay\b",
+    r"\bwho (did|do|does)\b.*\bface\b",
+    r"\bhow many\b",  # a count, even of a Super Bowl's points or a playoff run's wins
+    r"\brecord\b",
+)
 TENDENCY_PATTERNS = (
     r"\b(pass|run|rush)[- ]?(rate|heavy|happy)\b",
     r"\btendenc(y|ies)\b",
@@ -98,6 +108,7 @@ class KeywordRouter:
         for name, patterns in (
             ("advisor", ADVISOR_PATTERNS),
             ("tendency", TENDENCY_PATTERNS),
+            ("stats", STATS_PATTERNS),
             ("narrative", NARRATIVE_PATTERNS),
         ):
             pattern = _matches(question, patterns)

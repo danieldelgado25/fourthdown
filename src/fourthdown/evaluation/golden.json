@@ -5,25 +5,25 @@
       "id": "team-season-pass-rate",
       "question": "What was the Kansas City Chiefs' pass rate on designed plays in the 2023 season?",
       "tags": ["aggregate", "filtering"],
-      "reference_sql": "SELECT avg(is_pass_call::INT) AS pass_rate FROM plays WHERE season = 2023 AND posteam = 'KC' AND is_designed_play"
+      "reference_sql": "SELECT avg(is_pass_call::INT) AS pass_rate FROM plays WHERE season_type = 'REG' AND season = 2023 AND posteam = 'KC' AND is_designed_play"
     },
     {
       "id": "most-pass-happy-neutral",
       "question": "Which team had the highest neutral-script pass rate in 2022?",
       "tags": ["ranking", "game-script"],
-      "reference_sql": "SELECT posteam FROM plays WHERE season = 2022 AND is_designed_play AND is_neutral_script GROUP BY posteam ORDER BY avg(is_pass_call::INT) DESC LIMIT 1"
+      "reference_sql": "SELECT posteam FROM plays WHERE season_type = 'REG' AND season = 2022 AND is_designed_play AND is_neutral_script GROUP BY posteam ORDER BY avg(is_pass_call::INT) DESC LIMIT 1"
     },
     {
       "id": "third-and-long-epa",
       "question": "What is the league average EPA per play on third and long since 2020?",
       "tags": ["aggregate", "situational"],
-      "reference_sql": "SELECT avg(epa) AS epa_per_play FROM plays WHERE season >= 2020 AND down = 3 AND distance_bucket IN ('long', 'very_long') AND is_designed_play"
+      "reference_sql": "SELECT avg(epa) AS epa_per_play FROM plays WHERE season_type = 'REG' AND season >= 2020 AND down = 3 AND distance_bucket IN ('long', 'very_long') AND is_designed_play"
     },
     {
       "id": "red-zone-td-rate",
       "question": "How many drives reached the red zone and ended in a touchdown in 2023?",
       "tags": ["drives", "counting"],
-      "reference_sql": "SELECT count(*) FROM drives WHERE season = 2023 AND end_yardline_100 <= 20 AND scored_touchdown"
+      "reference_sql": "SELECT count(*) FROM drives WHERE season_type = 'REG' AND season = 2023 AND end_yardline_100 <= 20 AND scored_touchdown"
     },
     {
       "id": "coldest-game",
@@ -35,19 +35,19 @@
       "id": "qb-epa-leader",
       "question": "Which passer had the best EPA per play in the 2021 season, with at least 300 plays?",
       "tags": ["players", "ranking", "having"],
-      "reference_sql": "SELECT player_name FROM player_game WHERE season = 2021 AND role = 'passer' GROUP BY player_name HAVING sum(plays) >= 300 ORDER BY sum(epa_per_play * plays) / sum(plays) DESC LIMIT 1"
+      "reference_sql": "SELECT player_name FROM player_game WHERE season_type = 'REG' AND season = 2021 AND role = 'passer' GROUP BY player_id, player_name HAVING sum(plays) >= 300 ORDER BY sum(epa_per_play * plays) / sum(plays) DESC LIMIT 1"
     },
     {
       "id": "fourth-down-attempts-trend",
       "question": "How many fourth-down attempts were there in each season from 2019 to 2023?",
       "tags": ["trend", "group-by"],
-      "reference_sql": "SELECT season, count(*) AS attempts FROM plays WHERE season BETWEEN 2019 AND 2023 AND down = 4 AND is_designed_play GROUP BY season ORDER BY season"
+      "reference_sql": "SELECT season, count(*) AS attempts FROM plays WHERE season_type = 'REG' AND season BETWEEN 2019 AND 2023 AND down = 4 AND is_designed_play GROUP BY season ORDER BY season"
     },
     {
       "id": "shotgun-share",
       "question": "What share of designed plays were run out of shotgun in 2024?",
       "tags": ["aggregate", "rate"],
-      "reference_sql": "SELECT avg(shotgun::INT) AS shotgun_rate FROM plays WHERE season = 2024 AND is_designed_play"
+      "reference_sql": "SELECT avg(shotgun::INT) AS shotgun_rate FROM plays WHERE season_type = 'REG' AND season = 2024 AND is_designed_play"
     },
     {
       "id": "home-win-rate",
@@ -59,19 +59,19 @@
       "id": "team-epa-ranking",
       "question": "Rank the top five teams by offensive EPA per play in 2023.",
       "tags": ["ranking", "team-game"],
-      "reference_sql": "SELECT posteam FROM plays WHERE season = 2023 AND is_designed_play GROUP BY posteam ORDER BY avg(epa) DESC LIMIT 5"
+      "reference_sql": "SELECT posteam FROM plays WHERE season_type = 'REG' AND season = 2023 AND is_designed_play GROUP BY posteam ORDER BY avg(epa) DESC LIMIT 5"
     },
     {
       "id": "chargers-relocation",
       "question": "How many designed plays did the San Diego Chargers run in 2013?",
       "tags": ["aliasing", "trap"],
-      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2013 AND posteam = 'LAC' AND is_designed_play"
+      "reference_sql": "SELECT count(*) FROM plays WHERE season_type = 'REG' AND season = 2013 AND posteam = 'LAC' AND is_designed_play"
     },
     {
       "id": "kneel-exclusion",
       "question": "How many rushing plays did the Ravens call in 2023, excluding quarterback kneels?",
       "tags": ["trap", "designed-play"],
-      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2023 AND posteam = 'BAL' AND is_designed_play AND NOT is_pass_call"
+      "reference_sql": "SELECT count(*) FROM plays WHERE season_type = 'REG' AND season = 2023 AND posteam = 'BAL' AND is_designed_play AND NOT is_pass_call"
     },
     {
       "id": "two-minute-pass-rate",
@@ -84,6 +84,85 @@
       "question": "What was the largest margin of victory in any game in the data?",
       "tags": ["games", "extremes"],
       "reference_sql": "SELECT max(abs(home_margin)) AS margin FROM games"
+    },
+    {
+      "id": "receiver-receptions-full-name",
+      "question": "How many catches did Davante Adams have in 2020?",
+      "tags": ["players", "names", "receptions"],
+      "reference_sql": "SELECT sum(completions) AS receptions FROM player_game WHERE season = 2020 AND season_type = 'REG' AND role = 'receiver' AND player_name = 'D.Adams'"
+    },
+    {
+      "id": "receiver-targets",
+      "question": "How many times was Travis Kelce targeted in 2022?",
+      "tags": ["players", "names", "targets"],
+      "reference_sql": "SELECT sum(plays) AS targets FROM player_game WHERE season = 2022 AND season_type = 'REG' AND role = 'receiver' AND player_name = 'T.Kelce'"
+    },
+    {
+      "id": "week-opponent",
+      "question": "Who did the Patriots play in week 1 of the 2016 season?",
+      "tags": ["games", "schedule"],
+      "reference_sql": "SELECT CASE WHEN home_team = 'NE' THEN away_team ELSE home_team END AS opponent FROM games WHERE season_type = 'REG' AND season = 2016 AND week = 1 AND 'NE' IN (home_team, away_team)"
+    },
+    {
+      "id": "matchup-total-points",
+      "question": "How many total points were scored when the Chiefs played the Rams in 2018?",
+      "tags": ["games", "matchup"],
+      "reference_sql": "SELECT total_points FROM games WHERE season_type = 'REG' AND season = 2018 AND 'KC' IN (home_team, away_team) AND 'LA' IN (home_team, away_team)"
+    },
+    {
+      "id": "unanswerable-before-coverage",
+      "question": "How many touchdown passes did Peyton Manning throw in 2004?",
+      "tags": ["unanswerable", "coverage"],
+      "reference_sql": null,
+      "expect_unanswerable": true
+    },
+    {
+      "id": "playoff-player-total",
+      "question": "How many passing yards did Patrick Mahomes have in the 2022 playoffs?",
+      "tags": ["playoffs", "players"],
+      "reference_sql": "SELECT sum(yards) FROM player_game WHERE season = 2022 AND season_type = 'POST' AND role = 'passer' AND player_name = 'P.Mahomes'"
+    },
+    {
+      "id": "playoff-round-winner",
+      "question": "Who won the 2016 divisional round game between the Steelers and the Chiefs?",
+      "tags": ["playoffs", "games", "rounds"],
+      "reference_sql": "SELECT CASE WHEN home_margin > 0 THEN home_team ELSE away_team END AS winner FROM games WHERE season = 2016 AND playoff_round = 'divisional' AND 'PIT' IN (home_team, away_team) AND 'KC' IN (home_team, away_team)"
+    },
+    {
+      "id": "super-bowl-numeral",
+      "question": "How many total points were scored in Super Bowl LIII?",
+      "tags": ["playoffs", "games", "super-bowl"],
+      "reference_sql": "SELECT total_points FROM games WHERE season = 2018 AND playoff_round = 'super_bowl'"
+    },
+    {
+      "id": "playoff-touchdown-passes",
+      "question": "How many touchdown passes did Tom Brady throw in the 2020 playoffs?",
+      "tags": ["playoffs", "players"],
+      "reference_sql": "SELECT sum(touchdowns) FROM player_game WHERE season = 2020 AND season_type = 'POST' AND role = 'passer' AND player_name = 'T.Brady'"
+    },
+    {
+      "id": "playoff-wins-span",
+      "question": "How many playoff games did the Chiefs win from 2018 through 2023?",
+      "tags": ["playoffs", "games", "counting"],
+      "reference_sql": "SELECT count(*) FROM games WHERE season BETWEEN 2018 AND 2023 AND season_type = 'POST' AND ((home_team = 'KC' AND home_margin > 0) OR (away_team = 'KC' AND home_margin < 0))"
+    },
+    {
+      "id": "playoff-drives",
+      "question": "How many Chiefs drives ended in a touchdown in the 2022 playoffs?",
+      "tags": ["playoffs", "drives"],
+      "reference_sql": "SELECT count(*) FROM drives WHERE season = 2022 AND season_type = 'POST' AND posteam = 'KC' AND scored_touchdown"
+    },
+    {
+      "id": "regular-season-wins",
+      "question": "How many games did the Patriots win in 2010?",
+      "tags": ["games", "counting", "regular-season-default"],
+      "reference_sql": "SELECT count(*) FROM games WHERE season = 2010 AND season_type = 'REG' AND ((home_team = 'NE' AND home_margin > 0) OR (away_team = 'NE' AND home_margin < 0))"
+    },
+    {
+      "id": "regular-season-default-player",
+      "question": "How many rushing yards did Derrick Henry have in 2020?",
+      "tags": ["players", "regular-season-default"],
+      "reference_sql": "SELECT sum(yards) FROM player_game WHERE season = 2020 AND season_type = 'REG' AND role = 'rusher' AND player_name = 'D.Henry'"
     },
     {
       "id": "unanswerable-salary",

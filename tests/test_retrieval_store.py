@@ -131,6 +131,20 @@ def test_filters_restrict_the_candidate_pool(loaded: DocumentStore) -> None:
     assert _search(loaded, "Super Bowl", season=1999) == []
 
 
+def test_filters_take_several_seasons_every_team_and_a_week(loaded: DocumentStore) -> None:
+    games = {"game:2014_21_NE_SEA", "game:2013_21_SEA_DEN"}
+    assert set(_search(loaded, "Super Bowl", grain="game", season=[2013, 2014])) == games
+    # Several teams means games involving all of them, not any of them.
+    assert set(_search(loaded, "Super Bowl", team=["SEA", "DEN"])) == {"game:2013_21_SEA_DEN"}
+    assert _search(loaded, "Super Bowl", team=["NE", "DEN"]) == []
+    assert len(_search(loaded, "Super Bowl", week=21)) == 3
+    assert _search(loaded, "Super Bowl", week=1) == []
+
+
+def test_seasons_lists_what_is_indexed(store: DocumentStore, loaded: DocumentStore) -> None:
+    assert loaded.seasons() == {2013, 2014}
+
+
 def test_k_limits_the_result_count(loaded: DocumentStore) -> None:
     assert len(_search(loaded, "Super Bowl", k=1)) == 1
 

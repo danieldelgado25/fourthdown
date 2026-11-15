@@ -12,7 +12,10 @@ stamp="${data}/.pipeline"
 
 if [ -f "${data}/models/model_card.json" ] && [ "$(cat "${stamp}" 2>/dev/null)" = "${want}" ] \
     && fourthdown lineage --verify --output /tmp/lineage.md; then
-    echo "data and models are current (${want})"
+    # The views are code, not data: a new image can change them while every file still
+    # verifies, so redefine them anyway. It reads no parquet and takes a second.
+    fourthdown warehouse
+    echo "data and models are current (${want}); views refreshed"
     exit 0
 fi
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 
+from fourthdown.agent.parse import is_postseason, parse_seasons, parse_teams, parse_week
 from fourthdown.agent.tools import Evidence, Passage
 from fourthdown.llm import LLMClient, LLMError, default_client
 from fourthdown.retrieval import recall
@@ -57,9 +58,10 @@ class NarrativeTool:
 
     name = "narrative"
     description = (
-        "What happened in a specific game, drive, or moment: comebacks, upsets, famous "
+        "How a specific game, drive, or moment unfolded: comebacks, upsets, famous "
         "finishes, 'how did X lose to Y', 'tell me about the 2018 NFC championship'. "
-        "Answers from generated game summaries and cites them."
+        "Answers from generated game summaries and cites them. Not for a bare final "
+        "score or who played whom; those are stats."
     )
 
     def __init__(self, retriever: Retriever, client: LLMClient, *, k: int = 5) -> None:
@@ -69,12 +71,61 @@ class NarrativeTool:
 
     def run(self, question: str) -> Evidence:
         """Retrieve, then answer from the passages; see the class docstring."""
-        grounded = recall.answer(self._retriever, self._client, question, k=self._k)
+        filters = search_filters(question)
+        grounded = recall.answer(
+            self._retriever,
+            self._client,
+            question,
+            k=self._k,
+            empty_answer=self._nothing_found(filters),
+            **filters,  # type: ignore[arg-type]
+        )
+        detail = {name: str(value) for name, value in filters.items()}
         return Evidence(
             answer=grounded.answer,
             passages=passages_from(grounded.hits),
+            detail=detail,
             failed=not grounded.hits,
         )
+
+    def _nothing_found(self, filters: dict[str, object]) -> str:
+        """Why a filtered search came back empty: usually a season that was never indexed."""
+        coverage = self._retriever.coverage()
+        if coverage is None:
+            return "The narrative index is empty; run `fourthdown index`."
+        first, last = coverage
+        span = f"{first}" if first == last else f"{first}-{last}"
+        asked = ", ".join(f"{name} {value}" for name, value in filters.items())
+        return (
+            f"No game summaries match {asked or 'that question'}. The narrative index covers "
+            f"the {span} season{'s' if first != last else ''}; score and schedule questions "
+            "can go to the stats tool, which covers 2009-2024."
+        )
+
+
+def search_filters(question: str) -> dict[str, object]:
+    """Season, week, and team filters the question states outright; nothing is guessed.
+
+    A year next to Super Bowl or playoff wording may name the calendar year the game was
+    played in, which is the season before ("the 2017 Super Bowl" is season 2016), so
+    both seasons are searched.
+    """
+    filters: dict[str, object] = {}
+    years = parse_seasons(question)
+    if years:
+        seasons = (
+            sorted({season for year in years for season in (year - 1, year)})
+            if (is_postseason(question))
+            else sorted(set(years))
+        )
+        filters["season"] = seasons
+    week = parse_week(question)
+    if week is not None:
+        filters["week"] = week
+    teams = parse_teams(question)
+    if teams:
+        filters["team"] = teams[:2]
+    return filters
 
 
 def opener(

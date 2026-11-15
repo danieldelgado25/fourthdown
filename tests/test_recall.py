@@ -51,6 +51,7 @@ def test_answer_grounds_the_prompt_in_the_hits() -> None:
             "grain": None,
             "season": 2014,
             "team": None,
+            "week": None,
         }
     ]
     prompt = client.prompts[0]

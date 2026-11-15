@@ -109,8 +109,9 @@ SEARCH = """
 WITH filtered AS (
     SELECT * FROM documents
     WHERE (%(grain)s::text IS NULL OR grain = %(grain)s)
-      AND (%(season)s::int IS NULL OR season = %(season)s)
-      AND (%(team)s::text IS NULL OR %(team)s = ANY (teams))
+      AND (%(seasons)s::int[] IS NULL OR season = ANY (%(seasons)s::int[]))
+      AND (%(teams)s::text[] IS NULL OR teams @> %(teams)s::text[])
+      AND (%(week)s::int IS NULL OR week = %(week)s)
 ), dense AS (
     SELECT doc_id, row_number() OVER (ORDER BY embedding <=> %(vector)s::vector) AS rank
     FROM filtered
@@ -152,6 +153,16 @@ ON CONFLICT (doc_id) DO UPDATE SET
     week = EXCLUDED.week, teams = EXCLUDED.teams, title = EXCLUDED.title,
     body = EXCLUDED.body, embedding = EXCLUDED.embedding
 """
+
+
+def _as_list(value: object) -> list[object] | None:
+    """A filter value as a Postgres array parameter: ``None``, one value, or several."""
+    if value is None:
+        return None
+    if isinstance(value, (str, int)):
+        return [value]
+    values = list(value)  # type: ignore[call-overload]
+    return values or None
 
 
 def _vector_literal(vector: Sequence[float]) -> str:
@@ -266,6 +277,14 @@ class DocumentStore:
             cursor.executemany(UPSERT, batch)
         return len(batch)
 
+    def seasons(self) -> set[int]:
+        """Seasons with at least one indexed document; empty before the first index."""
+        exists = self._connection.execute("SELECT to_regclass('documents')").fetchone()
+        if not exists or exists[0] is None:
+            return set()
+        rows = self._connection.execute("SELECT DISTINCT season FROM documents").fetchall()
+        return {int(row[0]) for row in rows}
+
     def count(self, *, grain: str | None = None) -> int:
         row = self._connection.execute(
             "SELECT count(*) FROM documents WHERE (%s::text IS NULL OR grain = %s)",
@@ -288,12 +307,16 @@ class DocumentStore:
         *,
         k: int = 5,
         grain: str | None = None,
-        season: int | None = None,
-        team: str | None = None,
+        season: int | Sequence[int] | None = None,
+        team: str | Sequence[str] | None = None,
+        week: int | None = None,
         mode: str = "hybrid",
         candidates: int = DEFAULT_CANDIDATES,
     ) -> list[Hit]:
         """Dense and lexical candidate lists fused by reciprocal rank.
+
+        ``season`` keeps documents from any of the given seasons; ``team`` keeps those
+        involving every given team, so two teams find the games between them.
 
         ``mode`` switches a half off (``dense`` or ``lexical``), which is what the
         retrieval evaluation needs to show the fusion is earning its place.
@@ -308,8 +331,9 @@ class DocumentStore:
                 "vector": _vector_literal(embedding),
                 "question": question,
                 "grain": grain,
-                "season": season,
-                "team": team,
+                "seasons": _as_list(season),
+                "teams": _as_list(team),
+                "week": week,
                 "candidates": candidates,
                 "rrf_k": RRF_K,
                 "k": k,

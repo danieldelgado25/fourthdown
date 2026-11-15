@@ -86,6 +86,70 @@ def parse_team(question: str) -> str | None:
     return None
 
 
+_WEEK = re.compile(r"\bweek\s+(\d{1,2})\b", re.IGNORECASE)
+_POSTSEASON = re.compile(
+    r"\b(super\s*bowl|playoffs?|postseason|wild\s*card|divisional|"
+    r"(afc|nfc|conference)\s+championship)\b",
+    re.IGNORECASE,
+)
+
+# Former names and cities, so older questions still resolve to the normalised abbreviation.
+_TEAM_ALIASES: dict[str, str] = {
+    "redskins": "WAS",
+    "football team": "WAS",
+    "oakland": "LV",
+    "san diego": "LAC",
+    "st. louis": "LA",
+    "st louis": "LA",
+    "niners": "SF",
+    "bucs": "TB",
+    "pats": "NE",
+}
+
+
+def parse_seasons(question: str) -> list[int]:
+    """Every year that looks like a season, in order; empty when none is named."""
+    return [int(year) for year in _SEASON.findall(question)]
+
+
+def parse_week(question: str) -> int | None:
+    """``week 7`` -> 7, or ``None`` when no week is named."""
+    match = _WEEK.search(question)
+    return int(match.group(1)) if match else None
+
+
+def is_postseason(question: str) -> bool:
+    """True for Super Bowl and playoff phrasing, where a year may name the season before."""
+    return _POSTSEASON.search(question) is not None
+
+
+def parse_teams(question: str) -> list[str]:
+    """Every team the question names, in order of appearance, without duplicates.
+
+    Abbreviations count only in capitals, so "no" and "ne" in a sentence stay words.
+    Cities count only when no nickname does, since "Los Angeles" and "New York" each
+    name two clubs.
+    """
+    found: list[tuple[int, str]] = []
+    for match in re.finditer(r"[A-Za-z0-9']+", question):
+        word = match.group(0)
+        bare = word.lower().removesuffix("'s").removesuffix("'")
+        if word.isupper() and word in TEAM_NAMES:
+            found.append((match.start(), word))
+        elif bare in _NICKNAMES:
+            found.append((match.start(), _NICKNAMES[bare]))
+    lowered = question.lower()
+    for alias, abbreviation in _TEAM_ALIASES.items():
+        for match in re.finditer(rf"\b{re.escape(alias)}\b", lowered):
+            found.append((match.start(), abbreviation))
+    if not found:
+        for city, abbreviation in _CITIES.items():
+            index = lowered.find(city)
+            if index >= 0 and city not in {"los angeles", "new york"}:
+                found.append((index, abbreviation))
+    return list(dict.fromkeys(abbreviation for _, abbreviation in sorted(found)))
+
+
 def parse_state(question: str) -> GameState | None:
     """A fourth-down situation, or `None` when distance or field position is missing.
 

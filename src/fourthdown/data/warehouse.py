@@ -20,6 +20,15 @@ LOGGER = logging.getLogger(__name__)
 
 VIEW_NAMES: tuple[str, ...] = ("plays", "games", "drives", "team_game", "player_game", "players")
 
+# Postseason weeks follow the last regular-season week, which moved from 17 to 18 when the
+# season grew in 2021, so a round is the week's offset from it, not a fixed week number.
+PLAYOFF_ROUND = """CASE WHEN any_value(season_type) = 'POST' THEN
+        CASE any_value(week) - CASE WHEN any_value(season) >= 2021 THEN 18 ELSE 17 END
+            WHEN 1 THEN 'wild_card' WHEN 2 THEN 'divisional'
+            WHEN 3 THEN 'conference' WHEN 4 THEN 'super_bowl'
+        END
+    END"""
+
 PLAYS_VIEW = """
 CREATE OR REPLACE VIEW plays AS
 SELECT * FROM read_parquet('{glob}')
@@ -40,13 +49,14 @@ SELECT NULL::VARCHAR AS player_id, NULL::VARCHAR AS full_name, NULL::VARCHAR AS 
 WHERE false
 """
 
-GAMES_VIEW = """
+GAMES_VIEW = f"""
 CREATE OR REPLACE VIEW games AS
 SELECT
     game_id,
     any_value(season) AS season,
     any_value(season_type) AS season_type,
     any_value(week) AS week,
+    {PLAYOFF_ROUND} AS playoff_round,
     any_value(game_date) AS game_date,
     any_value(home_team) AS home_team,
     any_value(away_team) AS away_team,
@@ -75,6 +85,7 @@ SELECT
     drive_id,
     any_value(game_id) AS game_id,
     any_value(season) AS season,
+    any_value(season_type) AS season_type,
     any_value(week) AS week,
     any_value(posteam) AS posteam,
     any_value(defteam) AS defteam,
@@ -96,14 +107,16 @@ WHERE drive_id IS NOT NULL AND posteam IS NOT NULL
 GROUP BY drive_id
 """
 
-TEAM_GAME_VIEW = """
+TEAM_GAME_VIEW = f"""
 CREATE OR REPLACE VIEW team_game AS
 SELECT
     game_id,
     posteam AS team,
     any_value(defteam) AS opponent,
     any_value(season) AS season,
+    any_value(season_type) AS season_type,
     any_value(week) AS week,
+    {PLAYOFF_ROUND} AS playoff_round,
     any_value(posteam_is_home) AS is_home,
     count(*) AS plays,
     count(*) FILTER (WHERE is_designed_play) AS designed_plays,
@@ -129,16 +142,19 @@ GROUP BY game_id, posteam
 
 # Box-score conventions: two-point tries are not plays, sack yardage is charged to the team
 # rather than the passer, and a touchdown counts for a role only when that role scored it
-# (`touchdown` alone also fires on the defence's pick-six or fumble return).
-PLAYER_GAME_VIEW = """
+# (`touchdown` alone also fires on the defence's pick-six or fumble return). A receiver's
+# `plays` are targets, incompletions included; `completions` are the catches.
+PLAYER_GAME_VIEW = f"""
 CREATE OR REPLACE VIEW player_game AS
 WITH roles AS (
 SELECT
-    game_id, season, week, posteam AS team, 'passer' AS role,
+    game_id, season, season_type, week, {PLAYOFF_ROUND} AS playoff_round,
+    posteam AS team, 'passer' AS role,
     passer_player_id AS player_id, passer_player_name AS player_name,
     count(*) AS plays,
     coalesce(sum(yards_gained) FILTER (WHERE NOT coalesce(sack, false)), 0) AS yards,
     sum(coalesce(pass_touchdown, false)::INT) AS touchdowns,
+    sum(coalesce(complete_pass, false)::INT) AS completions,
     avg(epa) AS epa_per_play,
     avg(cpoe) AS cpoe
 FROM plays
@@ -146,11 +162,13 @@ WHERE passer_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
 GROUP BY ALL
 UNION ALL
 SELECT
-    game_id, season, week, posteam AS team, 'rusher' AS role,
+    game_id, season, season_type, week, {PLAYOFF_ROUND} AS playoff_round,
+    posteam AS team, 'rusher' AS role,
     rusher_player_id AS player_id, rusher_player_name AS player_name,
     count(*) AS plays,
     sum(yards_gained) AS yards,
     sum(coalesce(rush_touchdown, false)::INT) AS touchdowns,
+    NULL AS completions,
     avg(epa) AS epa_per_play,
     NULL AS cpoe
 FROM plays
@@ -158,11 +176,13 @@ WHERE rusher_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
 GROUP BY ALL
 UNION ALL
 SELECT
-    game_id, season, week, posteam AS team, 'receiver' AS role,
+    game_id, season, season_type, week, {PLAYOFF_ROUND} AS playoff_round,
+    posteam AS team, 'receiver' AS role,
     receiver_player_id AS player_id, receiver_player_name AS player_name,
     count(*) AS plays,
     sum(yards_gained) AS yards,
     sum(coalesce(pass_touchdown, false)::INT) AS touchdowns,
+    sum(coalesce(complete_pass, false)::INT) AS completions,
     avg(epa) AS epa_per_play,
     NULL AS cpoe
 FROM plays

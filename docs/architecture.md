@@ -103,6 +103,19 @@ Diagnosing the failures also found a warehouse bug: `drives.scored_touchdown` wa
 for pick-sixes and other return touchdowns, so the golden reference itself was counting
 the defence's scores. It now follows the drive result.
 
+**A season means the regular season.** Every aggregate view carries `season_type`, and
+`games`, `team_game`, and `player_game` carry `playoff_round` (`wild_card` through
+`super_bowl`, computed from the week because the last regular week moved from 17 to 18 in
+2021). "Derrick Henry's rushing yards in 2020" is the box-score 2,027, not 2,067 with the
+playoff game; "his yards in the 2020 playoffs" filters `'POST'`. The golden references
+follow the same convention. Questions the live demo got wrong drove three more checks
+that run only when a query returns nothing: a `player_name` filter that matches no one
+(full names and nicknames, where nflverse stores `C.Ochocinco`) and a team code that is
+not one of the 32 (`LAR` for `LA`) are fed back like an error, with the names or code
+that do exist; a question naming only seasons outside the warehouse is refused before
+the model is called. Player totals group by `player_id`, since names like `C.Johnson`
+belong to several players.
+
 **A held-out set keeps the tuning honest.** Prompt changes made while looking at 15
 questions can memorise them. `golden_holdout.json` holds 15 different questions, written
 and scored before any tuning and never used to choose card text or exemplars. The

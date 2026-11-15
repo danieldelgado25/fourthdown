@@ -48,7 +48,7 @@ def test_keyword_router_sends_what_happened_questions_to_narrative(tools):
 
 
 def test_keyword_router_defaults_to_stats(tools):
-    route = KeywordRouter(tools).route("How many completions did Brady have in 2012?")
+    route = KeywordRouter(tools).route("Who threw the most interceptions in 2012?")
     assert route.tool == "stats"
     assert "statistics" in route.reason
 

@@ -274,8 +274,10 @@ dc --profile app pull && dc --profile app up -d --no-build
 
 The first run hands `./data` to uid 10001, the user every image runs as (the
 `data-owner` step), then builds the warehouse and trains in place. The index covers
-`FOURTHDOWN_INDEX_SEASONS` (default 2024); widen it in `.env` and rerun that line to
-index more. Updating is the last line again. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
+`FOURTHDOWN_INDEX_SEASONS` (default 2009-2024). The index step embeds only seasons not
+yet in the index (`--missing-only`), so rerunning that line after widening it is cheap.
+Updating is the last line again; when a release changes the views, run the first line
+too (with the app stopped), since the pipeline redefines them even when the data is current. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
 a release, which is also how you roll back.
 
 #### The live deployment
@@ -292,7 +294,7 @@ The demo runs exactly this, on the smallest VM the hosted-model setup allows:
 | Network | a static public IP; the firewall admits only SSH, 80, and 443 |
 | Chat model | `openai/gpt-oss-120b` on Groq's OpenAI-compatible API, so answers take seconds |
 | Embeddings | `nomic-embed-text` on the bundled Ollama, CPU only |
-| Data | the 2009-2024 warehouse and trained models, built on the VM by the pipeline job; 2024 game and postseason-drive narratives indexed in pgvector |
+| Data | the 2009-2024 warehouse and trained models, built on the VM by the pipeline job; 2009-2024 game and postseason-drive narratives indexed in pgvector |
 | Cost | stopped (deallocated) between demos, so it bills by the hour only while running; every service restarts on boot |
 
 ### Running it on Kubernetes

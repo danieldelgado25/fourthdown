@@ -256,6 +256,14 @@ def index_cmd(
         typer.Option("--playoff-drives", help="Index postseason drives only (4% of them)."),
     ] = False,
     reset: Annotated[bool, typer.Option("--reset", help="Drop the index first.")] = False,
+    missing_only: Annotated[
+        bool,
+        typer.Option(
+            "--missing-only",
+            help="Skip seasons that already have documents, so widening the range only "
+            "embeds the new ones.",
+        ),
+    ] = False,
     data_dir: DataDir = None,
     verbose: Verbose = False,
 ) -> None:
@@ -264,6 +272,13 @@ def index_cmd(
     wanted = ingest.parse_seasons(seasons, latest=_latest_season())
     embedder = default_embedder()
     with warehouse.connect(data_paths(data_dir)) as connection, DocumentStore.open() as store:
+        if missing_only and not reset:
+            indexed = store.seasons()
+            wanted = [season for season in wanted if season not in indexed]
+            if not wanted:
+                typer.echo("every requested season is already indexed")
+                return
+            typer.echo(f"indexing {len(wanted)} season(s) not yet in the index: {wanted}")
         report = index.build(
             connection,
             store,

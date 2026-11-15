@@ -106,13 +106,15 @@ services:
     environment:
       <<: *ollama
       FOURTHDOWN_PG_DSN: *dsn
-      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2024}
+      # Every season the warehouse holds, so narrative questions about 2016 find 2016.
+      # --missing-only embeds just the seasons not indexed yet, so a rerun is cheap.
+      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2009-2024}
     command:
       - sh
       - -c
       - >-
-        fourthdown wait --min-documents 1 --timeout 0 ||
         fourthdown index --seasons "$${FOURTHDOWN_INDEX_SEASONS}" --playoff-drives
+        --missing-only
     volumes:
       - ./data:/data:ro
     depends_on:

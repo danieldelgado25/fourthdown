@@ -63,11 +63,21 @@ class Retriever:
         *,
         k: int = 5,
         grain: str | None = None,
-        season: int | None = None,
-        team: str | None = None,
+        season: int | Sequence[int] | None = None,
+        team: str | Sequence[str] | None = None,
+        week: int | None = None,
     ) -> list[Hit]:
         embedding = self._embedder.encode([question])[0]
-        return self._store.search(question, embedding, k=k, grain=grain, season=season, team=team)
+        return self._store.search(
+            question, embedding, k=k, grain=grain, season=season, team=team, week=week
+        )
+
+    def coverage(self) -> tuple[int, int] | None:
+        """First and last indexed season across every grain, or ``None`` when empty."""
+        rows = self._store.coverage()
+        if not rows:
+            return None
+        return min(row[2] for row in rows), max(row[3] for row in rows)
 
 
 def answer(
@@ -77,16 +87,14 @@ def answer(
     *,
     k: int = 5,
     grain: str | None = None,
-    season: int | None = None,
-    team: str | None = None,
+    season: int | Sequence[int] | None = None,
+    team: str | Sequence[str] | None = None,
+    week: int | None = None,
+    empty_answer: str = "Nothing in the narrative index matches that question.",
 ) -> GroundedAnswer:
-    hits = retriever.search(question, k=k, grain=grain, season=season, team=team)
+    hits = retriever.search(question, k=k, grain=grain, season=season, team=team, week=week)
     if not hits:
-        return GroundedAnswer(
-            question=question,
-            answer="Nothing in the narrative index matches that question.",
-            hits=[],
-        )
+        return GroundedAnswer(question=question, answer=empty_answer, hits=[])
     response = client.complete(
         system=SYSTEM_PROMPT,
         prompt=PROMPT.format(passages=format_passages(hits), question=question),

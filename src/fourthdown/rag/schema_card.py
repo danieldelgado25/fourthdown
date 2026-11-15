@@ -27,7 +27,7 @@ VIEW_PURPOSE: dict[str, str] = {
     ),
     "player_game": (
         "One row per player per game per role ('passer', 'rusher', 'receiver'). Season "
-        "figures need GROUP BY player_name with sum(), and play minimums go in "
+        "figures need GROUP BY player_id, player_name with sum(), and play minimums go in "
         "HAVING sum(plays) >= N."
     ),
     "players": "Every player nflverse knows; join on player_id.",
@@ -63,6 +63,7 @@ COLUMN_NOTES: dict[str, str] = {
         "'leading_one_score', 'leading_two_scores', 'leading_big'"
     ),
     "season_type": "'REG' or 'POST'",
+    "playoff_round": "'wild_card', 'divisional', 'conference', 'super_bowl'; NULL in REG",
     "posteam_won": "true when the team with the ball won the game; NULL on ties",
     "play_desc": "free-text description of the play",
     "play_type": (
@@ -89,7 +90,8 @@ VIEW_COLUMN_NOTES: dict[tuple[str, str], str] = {
         "where the drive finished; <= 20 means it reached the red zone (drives has no field_zone)"
     ),
     ("drives", "scored_touchdown"): "the offense scored; pick-sixes and return TDs do not count",
-    ("player_game", "plays"): "plays in this game in which the player filled this role",
+    ("player_game", "plays"): "dropbacks, carries, or targets (receivers)",
+    ("player_game", "completions"): "passer completions; receiver catches; NULL for rushers",
     ("player_game", "epa_per_play"): (
         "for this game only; a season value is sum(epa_per_play * plays) / sum(plays)"
     ),
@@ -168,9 +170,15 @@ Rules:
 - Team abbreviations are the current ones for all history: use LAC (not SD), LA (not
   STL), LV (not OAK), JAX, WAS, ARI.
 - The season is the year it started: the February 2024 Super Bowl is season 2023.
+  Super Bowl N is season 1965 + N.
 - Filter a named player on the player_id listed with the question (plays:
-  passer_player_id, rusher_player_id, receiver_player_id). Failing that, on full_name.
+  passer_player_id, rusher_player_id, receiver_player_id). Else full_name, or
+  player_name ILIKE 'P.%Mahomes'.
 - Filter on every team, season, down, and situation the question names.
+- Catches: sum(completions). Targets: sum(plays), role 'receiver'.
+- Season totals, rates, records, and leaders use season_type = 'REG'. Playoffs use
+  'POST'; a named round also filters playoff_round.
+- A matchup: 'KC' IN (home_team, away_team) AND 'LA' IN (home_team, away_team).
 - Count plays with count(*) on plays; only the other views have a `plays` column.
 - team_game and player_game rates are per game. For a team's season rate, compute it
   from plays grouped by posteam, never avg() of a per-game rate.
@@ -217,10 +225,13 @@ def _short_type(duckdb_type: str) -> str:
     return mapping.get(duckdb_type.upper(), duckdb_type.lower())
 
 
-def _render_view(view: str, columns: list[Column]) -> str:
+def _render_view(view: str, columns: list[Column], seen: set[tuple[str, str]]) -> str:
+    """One view's block. A note already printed for the same column is not repeated."""
     lines = [f"{view} — {VIEW_PURPOSE[view]}"]
     for column in columns:
-        note = f"  # {column.note}" if column.note else ""
+        key = (column.name, column.note or "")
+        note = f"  # {column.note}" if column.note and key not in seen else ""
+        seen.add(key)
         lines.append(f"  {column.name} {column.type}{note}")
     return "\n".join(lines)
 
@@ -239,16 +250,17 @@ def view_columns(connection: duckdb.DuckDBPyConnection) -> dict[str, tuple[str, 
 def build(connection: duckdb.DuckDBPyConnection) -> str:
     """Render the schema card from the live warehouse catalogue."""
     blocks = []
+    seen: set[tuple[str, str]] = set()
     for view in VIEW_NAMES:
         columns = _columns(connection, view)
         if view == "plays":
             highlighted = {column.name: column for column in columns}
             columns = [highlighted[name] for name in PLAYS_HIGHLIGHT if name in highlighted]
             extra = len(highlighted) - len(columns)
-            block = _render_view(view, columns)
+            block = _render_view(view, columns, seen)
             block += f"\n  ...and {extra} more raw nflverse columns (penalties, kicking, ids)"
         else:
-            block = _render_view(view, columns)
+            block = _render_view(view, columns, seen)
         blocks.append(block)
     coverage = connection.execute("SELECT min(season), max(season), count(*) FROM plays").fetchone()
     if coverage is None:  # pragma: no cover - an aggregate always returns a row

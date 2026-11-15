@@ -36,7 +36,8 @@ def test_card_notes_are_view_specific(views_connection) -> None:
 
 
 def test_card_stays_within_a_reasonable_prompt_budget(views_connection) -> None:
-    assert len(schema_card.build(views_connection)) < 8000
+    # 8000 until the playoff columns (season_type everywhere, playoff_round) and their rules.
+    assert len(schema_card.build(views_connection)) < 8500
 
 
 def test_card_translates_football_terms_into_filters(views_connection) -> None:
