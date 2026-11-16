@@ -302,8 +302,8 @@ The warehouse service writes its miss log to `./data/feedback`, the one writable
 an otherwise read-only `./data`. The pipeline creates it as uid 10001; on a server set up
 before that, create it once with `sudo install -d -o 10001 -g 10001 data/feedback` before
 the last line, or the log is skipped (answers are unaffected) with a warning in
-`dc logs warehouse`. Read it with
-`dc --profile app exec warehouse fourthdown misses`.
+`dc logs warehouse`. The service images carry no CLI, so read it with the pipeline
+image: `dc --profile pipeline run --rm --no-deps pipeline fourthdown misses`.
 
 #### The live deployment
 
