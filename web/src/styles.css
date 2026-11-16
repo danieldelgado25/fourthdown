@@ -494,47 +494,86 @@ tbody tr:hover {
   background: var(--color-surface-2);
 }
 
+/* ── AdvisorPanel: the situation form and the ranked options ─────────────────────── */
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
+  gap: var(--space-2);
   align-items: end;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+.grid label {
+  margin-bottom: 0;
+}
+
+.grid input {
+  margin-top: var(--space-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .options {
   list-style: none;
   padding: 0;
-  margin: 14px 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 .options li {
   display: grid;
-  grid-template-columns: 110px 1fr 70px;
+  grid-template-columns: 120px 1fr 72px;
   align-items: center;
-  gap: 10px;
-  padding: 6px 0;
+  gap: var(--space-half) 12px;
+  padding: 12px 0;
+}
+
+.options li + li {
+  border-top: 1px solid var(--color-border);
 }
 
 .option-name {
   font-weight: 600;
 }
 
+/* The bar's width is the win probability. The best option (listed first) gets the accent. */
 .bar {
   display: block;
   height: 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 65%, transparent);
   min-width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+}
+
+.options li:first-child .bar {
+  background: var(--color-accent);
 }
 
 .value {
   text-align: right;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .detail {
   grid-column: 1 / -1;
-  font-size: 12px;
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 600px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: var(--space-2);
+  }
+
+  .grid button[type="submit"] {
+    grid-column: 1 / -1;
+  }
+
+  .options li {
+    grid-template-columns: 88px 1fr 60px;
+  }
 }
 
 .tendencies li {
