@@ -57,15 +57,6 @@
   --ease: 150ms cubic-bezier(0.2, 0, 0, 1);
   --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
 
-  /* Older names, kept until every rule uses the scale above */
-  --bg: var(--color-bg);
-  --panel: var(--color-surface);
-  --line: var(--color-border);
-  --text: var(--color-text);
-  --muted: var(--color-text-muted);
-  --accent: var(--color-accent);
-  --warn: var(--color-danger);
-
   color-scheme: dark;
 }
 
