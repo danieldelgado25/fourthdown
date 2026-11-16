@@ -1,23 +1,202 @@
+/* ── Design tokens ───────────────────────────────────────────────────────────────────
+   One accent (field green), a neutral gray ramp, an 8px spacing scale. Contrast on
+   --color-bg: text 16.4:1, muted 8.6:1, subtle 5.6:1, accent 10.1:1; the lowest pairing
+   anywhere, subtle text on a card, is 5.2:1. All pass WCAG AA. */
 :root {
-  --bg: #0f1115;
-  --panel: #171b22;
-  --line: #262c36;
-  --text: #e7ebf0;
-  --muted: #8d97a6;
-  --accent: #4ade80;
-  --warn: #f87171;
+  /* Surfaces, darkest to lightest */
+  --color-bg: #0b0d12;
+  --color-surface: #12161d;
+  --color-surface-2: #181d26;
+  --color-surface-3: #202632;
+  --color-border: #242b37;
+  --color-border-strong: #343d4c;
+
+  /* Text */
+  --color-text: #e8ecf2;
+  --color-text-muted: #a3adbb;
+  --color-text-subtle: #7f8a9a;
+
+  /* The one accent, and what sits on it */
+  --color-accent: #34d399;
+  --color-accent-strong: #10b981;
+  --color-accent-soft: rgb(52 211 153 / 0.14);
+  --color-on-accent: #03140d;
+
+  /* Status */
+  --color-danger: #f87171;
+  --color-danger-soft: rgb(248 113 113 / 0.12);
+
+  /* Spacing: an 8px scale, with a 4px half step for tight gaps */
+  --space-half: 4px;
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 40px;
+  --space-6: 48px;
+  --space-8: 64px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Type */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  /* Motion and focus */
+  --ease: 150ms cubic-bezier(0.2, 0, 0, 1);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+
+  /* Older names, kept until every rule uses the scale above */
+  --bg: var(--color-bg);
+  --panel: var(--color-surface);
+  --line: var(--color-border);
+  --text: var(--color-text);
+  --muted: var(--color-text-muted);
+  --accent: var(--color-accent);
+  --warn: var(--color-danger);
+
   color-scheme: dark;
 }
 
+/* ── Base ──────────────────────────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: var(--text-base) / 1.55 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.error {
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border: 1px solid rgb(248 113 113 / 0.3);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}
+
+/* ── Shared controls ───────────────────────────────────────────────────────────────── */
+form label {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font: inherit;
+  transition: border-color var(--ease), background-color var(--ease);
+}
+
+textarea:hover,
+input:hover,
+select:hover {
+  border-color: var(--color-border-strong);
+}
+
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  border-color: var(--color-accent);
+}
+
+button {
+  font: inherit;
+}
+
+button[type="submit"] {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: 10px var(--space-3);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--ease), border-color var(--ease);
+}
+
+button[type="submit"]:hover:not([disabled]) {
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+}
+
+button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* A card: answers and results */
+.answer {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.answer.failed {
+  border-color: rgb(248 113 113 / 0.45);
+}
+
+.answer header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1) 12px;
+  flex-wrap: wrap;
+  font-size: var(--text-xs);
+}
+
+.badge {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 main {
@@ -30,14 +209,6 @@ h1 {
   margin: 0;
   font-size: 28px;
   letter-spacing: -0.02em;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.error {
-  color: var(--warn);
 }
 
 .top {
@@ -90,44 +261,6 @@ nav {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
 
-form label {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
-}
-
-textarea,
-input,
-select {
-  width: 100%;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-  font: inherit;
-}
-
-button[type="submit"],
-.chip {
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 9px 16px;
-  cursor: pointer;
-}
-
-button[type="submit"] {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
-}
-
-button[disabled] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 .row {
   display: flex;
   gap: 8px;
@@ -138,13 +271,6 @@ button[disabled] {
   max-width: 220px;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  align-items: end;
-}
-
 .examples {
   display: flex;
   flex-wrap: wrap;
@@ -153,41 +279,40 @@ button[disabled] {
 }
 
 .chip {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.chip {
   font-size: 12px;
   color: var(--muted);
   padding: 5px 10px;
 }
 
-.answer {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 16px;
-  margin-top: 18px;
-}
-
-.answer.failed {
-  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
-}
-
-.answer header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  font-size: 12px;
-}
-
-.badge {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-  border-radius: 999px;
-  padding: 3px 10px;
-  font-weight: 600;
-}
-
 .prose {
   white-space: pre-wrap;
+}
+
+.passages {
+  padding-left: 18px;
+}
+
+.passages p {
+  color: var(--muted);
+  margin: 4px 0 12px;
+}
+
+pre {
+  background: #0b0d11;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 13px;
 }
 
 .scroll {
@@ -213,22 +338,11 @@ th {
   font-weight: 500;
 }
 
-.passages {
-  padding-left: 18px;
-}
-
-.passages p {
-  color: var(--muted);
-  margin: 4px 0 12px;
-}
-
-pre {
-  background: #0b0d11;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  overflow-x: auto;
-  font-size: 13px;
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  align-items: end;
 }
 
 .options {
