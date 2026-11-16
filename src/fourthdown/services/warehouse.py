@@ -29,7 +29,7 @@ from fourthdown.config import Paths, data_paths
 from fourthdown.data import warehouse
 from fourthdown.feedback import MissLog
 from fourthdown.llm import LLMClient, LLMError, default_client
-from fourthdown.rag.text_to_sql import TextToSQL
+from fourthdown.rag.text_to_sql import SQLAnswer, TextToSQL
 from fourthdown.services.common import (
     Capabilities,
     Reloading,
@@ -102,7 +102,14 @@ class StatsTool:
 
     def run(self, question: str) -> Evidence:
         """Answer ``question`` with SQL; see the class docstring for the outputs."""
-        answer = self._chain.answer(question)
+        return self.evidence(self._chain.answer(question))
+
+    def evidence(self, answer: SQLAnswer) -> Evidence:
+        """The envelope for a finished `SQLAnswer`: what the reader sees, and its table.
+
+        Separate from `run` so the grounding suite can check the exact text a reader gets
+        against the rows behind it (`fourthdown.evaluation.grounding`).
+        """
         if answer.unanswerable:
             return Evidence(
                 answer=answer.note or "The warehouse does not hold the data that question needs.",
