@@ -450,27 +450,48 @@ pre {
   }
 }
 
+/* ── ResultTable ───────────────────────────────────────────────────────────────────── */
 .scroll {
   overflow-x: auto;
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
 }
 
 table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 14px;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 th,
 td {
-  border-bottom: 1px solid var(--line);
   text-align: left;
-  padding: 7px 10px;
+  padding: 10px 14px;
   white-space: nowrap;
 }
 
 th {
-  color: var(--muted);
-  font-weight: 500;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--color-border);
+}
+
+tbody tr + tr td {
+  border-top: 1px solid var(--color-border);
+}
+
+tbody tr {
+  transition: background-color var(--ease);
+}
+
+tbody tr:hover {
+  background: var(--color-surface-2);
 }
 
 .grid {
