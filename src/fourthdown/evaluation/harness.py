@@ -11,6 +11,10 @@ for text-to-SQL benchmarks, with two concessions to the domain:
 
 Some questions are traps rather than tests of SQL skill: San Diego must map to LAC, and a
 rushing-play count must exclude kneels. Those are where the schema card earns its length.
+
+Questions marked ``expect_empty`` have no answer in the data (the Lions in a Super Bowl).
+They are correct when the query runs and returns nothing, NULLs, or zeros: they catch an
+empty-result review that "fixes" a true empty by dropping one of the question's filters.
 """
 
 from __future__ import annotations
@@ -22,7 +26,7 @@ from pathlib import Path
 
 import duckdb
 
-from fourthdown.rag.text_to_sql import SQLAnswer, TextToSQL
+from fourthdown.rag.text_to_sql import SQLAnswer, TextToSQL, holds_nothing
 
 FLOAT_PRECISION = 4
 DEV_FILE = "golden.json"
@@ -36,6 +40,7 @@ class GoldenQuestion:
     tags: tuple[str, ...]
     reference_sql: str | None
     expect_unanswerable: bool = False
+    expect_empty: bool = False
 
 
 @dataclass
@@ -108,6 +113,7 @@ def load_questions(path: Path | None = None, *, holdout: bool = False) -> list[G
             tags=tuple(entry.get("tags", ())),
             reference_sql=entry.get("reference_sql"),
             expect_unanswerable=bool(entry.get("expect_unanswerable", False)),
+            expect_empty=bool(entry.get("expect_empty", False)),
         )
         for entry in payload["questions"]
     ]
@@ -175,6 +181,10 @@ def grade(
             correct=False,
             detail=answer.error or "no query produced",
         )
+    if question.expect_empty:
+        correct = holds_nothing(answer.rows)
+        detail = "found nothing, correctly" if correct else f"invented an answer: {answer.rows[:3]}"
+        return QuestionResult(question=question, answer=answer, correct=correct, detail=detail)
     assert question.reference_sql is not None
     reference = connection.execute(question.reference_sql).fetchall()
     correct = results_match(reference, answer.rows)

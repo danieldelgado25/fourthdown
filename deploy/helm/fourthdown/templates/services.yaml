@@ -84,6 +84,12 @@ spec:
             - name: data
               mountPath: /data
               readOnly: true
+            {{- if $svc.feedback }}
+            # The miss log (fourthdown.feedback): the one writable path, made by the pipeline.
+            - name: data
+              mountPath: /data/feedback
+              subPath: feedback
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:

@@ -10,6 +10,10 @@ train_args="${FOURTHDOWN_TRAIN_ARGS:-}"
 want="seasons=${seasons} train=${train_args}"
 stamp="${data}/.pipeline"
 
+# The warehouse service's miss log: the one directory a serving container writes. Made
+# here, as the data's owner, so a bind mount or subPath finds it writable.
+mkdir -p "${data}/feedback"
+
 if [ -f "${data}/models/model_card.json" ] && [ "$(cat "${stamp}" 2>/dev/null)" = "${want}" ] \
     && fourthdown lineage --verify --output /tmp/lineage.md; then
     # The views are code, not data: a new image can change them while every file still

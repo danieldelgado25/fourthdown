@@ -116,6 +116,27 @@ that do exist; a question naming only seasons outside the warehouse is refused b
 the model is called. Player totals group by `player_id`, since names like `C.Johnson`
 belong to several players.
 
+**An empty result gets a second look.** The checks above catch two causes of an empty
+result; anything else (a misread `playoff_round`, the wrong `role`, contradictory filters)
+used to reach the user as a blank answer with no record. Now `fourthdown.sql.filters`
+reruns the query as `count(*)` with every condition, then with each top-level `AND`
+condition removed, and the model reviews those counts: either the answer is truly empty
+(the reason is shown), or the query is wrong and it writes a correction. Design choices:
+
+- The counts come first and need no model, because a model judging an empty result cold
+  guesses. "Removing `playoff_round = 'afc_championship'` brings back rows" names the bug.
+- The model only rewrites SQL. The correction passes the same guard and runs on DuckDB, so
+  every number still comes from the warehouse, and the reply shows both queries.
+- The prompt forbids dropping a filter the question states, and a correction that returns
+  only NULLs or zeros does not replace the original. The golden set holds questions whose
+  answer is nothing (`expect_empty`) to catch a reviewer that invents one.
+- One review, no loop, and only on empty results, so an answered question costs nothing
+  extra. When a correction also finds nothing, the reader gets a plain message; the
+  model's diagnosis of that case proved unreliable and goes only to the log.
+- Every empty result, reviewed or not, is a line in `data/feedback/misses.jsonl` with the
+  question, both queries, the counts, and the verdict (`fourthdown misses`). The warehouse
+  service mounts only that directory writable; a failed write never fails the answer.
+
 **A held-out set keeps the tuning honest.** Prompt changes made while looking at 15
 questions can memorise them. `golden_holdout.json` holds 15 different questions, written
 and scored before any tuning and never used to choose card text or exemplars. The

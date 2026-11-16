@@ -44,6 +44,12 @@ class Paths:
         return self.root / "models"
 
     @property
+    def feedback(self) -> Path:
+        """Questions whose query came back empty (`fourthdown.feedback`); the one place a
+        serving container writes."""
+        return self.root / "feedback"
+
+    @property
     def manifest(self) -> Path:
         return self.root / "manifest.json"
 

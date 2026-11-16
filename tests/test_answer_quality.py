@@ -114,7 +114,7 @@ def test_a_player_who_is_not_there_is_said_so_without_retrying(receivers):
     client = ScriptedClient(
         "SELECT sum(completions) FROM player_game WHERE player_name = 'Zzyzx Qwertyuiop'"
     )
-    answer = TextToSQL(receivers, client).answer("catches for Zzyzx Qwertyuiop?")
+    answer = TextToSQL(receivers, client, review=False).answer("catches for Zzyzx Qwertyuiop?")
     assert answer.ok
     assert len(client.prompts) == 1
     assert answer.note is not None
@@ -125,14 +125,14 @@ def test_stats_tool_explains_an_empty_answer_instead_of_printing_none(receivers)
     client = ScriptedClient(
         "SELECT sum(completions) AS catches FROM player_game WHERE player_name = 'Zzyzx Q'"
     )
-    evidence = StatsTool(TextToSQL(receivers, client)).run("catches for Zzyzx Q?")
+    evidence = StatsTool(TextToSQL(receivers, client, review=False)).run("catches for Zzyzx Q?")
     assert "None" not in evidence.answer
     assert "no player named like" in evidence.answer
 
 
 def test_stats_tool_says_no_rows_when_a_filter_matches_nothing(views_connection):
     client = ScriptedClient("SELECT sum(yards) FROM player_game WHERE week = 99")
-    evidence = StatsTool(TextToSQL(views_connection, client)).run("yards in week 99?")
+    evidence = StatsTool(TextToSQL(views_connection, client, review=False)).run("yards in week 99?")
     assert evidence.answer.startswith("No rows matched")
 
 

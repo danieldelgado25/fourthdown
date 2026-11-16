@@ -67,6 +67,24 @@ handwritten reference SQL, not by matching query text. The prompt was tuned on a
 on held-out. Per-question results are in [docs/text_to_sql_eval.md](docs/text_to_sql_eval.md)
 and [docs/text_to_sql_holdout_eval.md](docs/text_to_sql_holdout_eval.md).
 
+A query that runs but matches nothing gets one more look. It is rerun with each `WHERE`
+condition removed, so the model sees which filter emptied it (for Mahomes in the "2019
+AFC championship", removing `playoff_round = 'afc_championship'` leaves 17 rows and every
+other removal leaves none: the round is called `'conference'`). It then either confirms
+the answer is truly empty, with a reason the user sees, or writes a corrected query. The
+correction goes
+through the same guard and must keep every filter the question states; the reply shows it
+beside the original. Every empty result is appended to `data/feedback/misses.jsonl`:
+
+```bash
+fourthdown misses                            # newest empty results and their verdicts
+fourthdown misses --verdict wrong_query --sql   # the ones the review had to correct
+```
+
+A real miss there becomes a golden question or a schema-card rule. The golden set includes
+questions whose correct answer is nothing (the Lions in a Super Bowl), so a review that
+"fixes" a true empty by dropping a filter fails the evaluation.
+
 ## Narrative retrieval
 
 Statistics come from SQL; "what happened" comes from retrieval. The warehouse is
@@ -280,6 +298,13 @@ Updating is the last line again; when a release changes the views, run the first
 too (with the app stopped), since the pipeline redefines them even when the data is current. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
 a release, which is also how you roll back.
 
+The warehouse service writes its miss log to `./data/feedback`, the one writable mount in
+an otherwise read-only `./data`. The pipeline creates it as uid 10001; on a server set up
+before that, create it once with `sudo install -d -o 10001 -g 10001 data/feedback` before
+the last line, or the log is skipped (answers are unaffected) with a warning in
+`dc logs warehouse`. Read it with
+`dc --profile app exec warehouse fourthdown misses`.
+
 #### The live deployment
 
 The demo runs exactly this, on the smallest VM the hosted-model setup allows:
@@ -364,6 +389,8 @@ src/fourthdown/
     warehouse.py      DuckDB views: plays, games, drives, team_game, player_game, players
     audit.py          validation checks + the generated audit report
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
+  sql/filters.py      rerun an empty query with each WHERE condition removed
+  feedback.py         the miss log: one JSON line per empty result
   narrative/
     render.py         DuckDB rows -> deterministic game and drive documents
     teams.py          abbreviations -> names, so "Chiefs" matches `KC`
@@ -374,7 +401,7 @@ src/fourthdown/
     recall.py         grounded answers with citations over retrieved passages
   rag/
     schema_card.py    the prompt's view/column/semantics card, read from the live catalog
-    text_to_sql.py    generate -> validate -> execute, with repair-on-error
+    text_to_sql.py    generate -> validate -> execute, with repair-on-error and a review of empty results
     names.py          match player names in a question to player_ids before SQL is written
   llm/client.py       any OpenAI-compatible chat API behind a one-method protocol
   models/

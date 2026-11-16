@@ -9,6 +9,12 @@ Three failure modes matter and they are handled differently:
 - *SQL that runs and matches nothing* is caught in one case: a ``player_name`` filter that
   no row satisfies, which is nearly always a full name or a nickname where nflverse stores
   'P.Mahomes'. The names that do exist are fed back, the same way an error is.
+  An unknown team code is fed back the same way. Any other empty result gets one review:
+  the query is rerun with each WHERE condition removed (`fourthdown.sql.filters`), and the
+  model sees those counts and decides whether "nothing" is the true answer or the query
+  is wrong. A corrected query goes through the same guard and runs like any other; the
+  model never supplies a number. Every empty result is recorded in the miss log
+  (`fourthdown.feedback`) with the verdict, so real misses become golden questions.
 - *SQL that runs and is wrong* is otherwise not detectable here at all. That is what the golden set
   in `fourthdown.evaluation` is for, and why the answer always ships with its query.
 
@@ -17,17 +23,20 @@ Each attempt is recorded, so a failure is inspectable rather than a shrug.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 import duckdb
 
-from fourthdown.llm import LLMClient
+from fourthdown.feedback import MissLog
+from fourthdown.llm import LLMClient, LLMError
 from fourthdown.narrative.teams import TEAM_NAMES
 from fourthdown.rag import names, schema_card
-from fourthdown.sql import guard
+from fourthdown.sql import filters, guard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -115,7 +124,37 @@ Write a different, corrected query using only columns that exist. SQL only.
 
 SQL:"""
 
+REVIEW = """{card}
+
+Question: {question}
+{players}
+This query ran and matched nothing:
+{sql}
+
+Source rows left by the query's filters, and with each one removed:
+{filters}
+
+Decide whether the question truly has no answer in this data, or the query is wrong (a
+misread filter, the wrong view or role, a name or value spelled differently in the data).
+Read the counts: if only removing a filter the question itself states (its season, team,
+player, or round) brings rows back, the answer is truly empty, and the reason says which.
+A filter on a value that exists nowhere (a misspelled code or label) means a wrong query.
+A corrected query must keep every team, player, season, week, round, and situation the
+question names: never drop one just to get rows.
+
+Reply with one JSON object and nothing else, either
+{{"verdict": "expected_empty", "reason": "<one sentence for the user>"}}
+or
+{{"verdict": "wrong_query", "reason": "<one sentence: what was wrong>", "sql": "<query>"}}"""
+
 UNANSWERABLE = "UNANSWERABLE"
+
+CORRECTION_FOUND_NOTHING = "No rows matched, and a corrected query found nothing either."
+
+EXPECTED_EMPTY = "expected_empty"
+WRONG_QUERY = "wrong_query"
+UNREVIEWED = "unreviewed"
+_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 # Repairing at temperature 0 reproduces the failing query verbatim, so retries warm up.
 REPAIR_TEMPERATURES = (0.2, 0.5, 0.8)
@@ -204,6 +243,19 @@ def _is_empty(rows: list[tuple[object, ...]]) -> bool:
     return all(value is None for row in rows for value in row)
 
 
+def holds_nothing(rows: list[tuple[object, ...]]) -> bool:
+    """No rows, or only NULLs and zeros: what a count or sum over nothing returns.
+
+    Stricter than `_is_empty`, which decides when to review. A correction that comes back
+    with ``0`` has found nothing either, and must not be shown as a revised answer.
+    """
+    return all(value is None or value == 0 for row in rows for value in row)
+
+
+def _join(first: str | None, second: str | None) -> str | None:
+    return " | ".join(part for part in (first, second) if part) or None
+
+
 def mentioned_seasons(question: str) -> list[int]:
     """Every four-digit year in the question, in order."""
     return [int(year) for year in _YEAR.findall(question)]
@@ -222,6 +274,52 @@ class Attempt:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class Review:
+    """The second look an empty result gets.
+
+    ``verdict`` is ``expected_empty`` (nothing is the true answer), ``wrong_query`` (with a
+    correction in ``revised_sql``), or ``unreviewed`` (the review itself failed; ``error``
+    says how). ``revised_rows`` is how many rows the correction returned, ``None`` if it
+    never ran.
+    """
+
+    verdict: str
+    reason: str
+    original_sql: str
+    revised_sql: str | None = None
+    revised_rows: int | None = None
+    error: str | None = None
+
+    @property
+    def revised(self) -> bool:
+        """True when a correction ran and found data, so it replaced the original."""
+        return self.revised_sql is not None and bool(self.revised_rows)
+
+
+def parse_review(reply: str) -> tuple[str, str, str | None]:
+    """``(verdict, reason, sql)`` from the reviewer's reply; raises ValueError if unusable."""
+    match = _JSON_OBJECT.search(reply)
+    if match is None:
+        raise ValueError("the review reply held no JSON object")
+    try:
+        body = json.loads(match.group(0))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"the review reply was not valid JSON: {error}") from error
+    if not isinstance(body, dict):
+        raise ValueError("the review reply was not a JSON object")
+    verdict = str(body.get("verdict", "")).strip()
+    reason = str(body.get("reason", "")).strip()
+    if verdict == EXPECTED_EMPTY:
+        return verdict, reason, None
+    if verdict == WRONG_QUERY:
+        sql = str(body.get("sql") or "").strip()
+        if not sql:
+            raise ValueError("a wrong_query verdict came without a corrected query")
+        return verdict, reason, sql
+    raise ValueError(f"unknown review verdict {verdict!r}")
+
+
 @dataclass
 class SQLAnswer:
     """The outcome of a question: the query that ran, its rows, and the road there."""
@@ -236,6 +334,9 @@ class SQLAnswer:
     elapsed_seconds: float = 0.0
     note: str | None = None
     """Why an answer is empty or refused, in words a reader can act on."""
+    review: Review | None = None
+    """The second look an empty result got; when it revised the query, ``sql`` and
+    ``rows`` are the revision's and ``review.original_sql`` is what came back empty."""
 
     @property
     def ok(self) -> bool:
@@ -281,11 +382,20 @@ class TextToSQL:
         *,
         max_attempts: int = 3,
         max_rows: int = guard.DEFAULT_ROW_LIMIT,
+        review: bool = True,
+        miss_log: MissLog | None = None,
     ) -> None:
+        """
+        Args:
+            review: Give an empty result one model review (see the module docstring).
+            miss_log: Where every empty result is recorded; nowhere when ``None``.
+        """
         self._connection = connection
         self._client = client
         self._max_attempts = max_attempts
         self._max_rows = max_rows
+        self._review_empty = review
+        self._miss_log = miss_log
         self._card = schema_card.build(connection)
         self._view_columns = schema_card.view_columns(connection)
         self._names = names.NameResolver(names.load_roster(connection))
@@ -390,6 +500,77 @@ class TextToSQL:
         )
         return extract_sql(response)
 
+    def _review(
+        self, question: str, players: str, sql: str, report: filters.FilterReport | None
+    ) -> tuple[Review, tuple[str, ...], list[tuple[object, ...]]]:
+        """Ask whether an empty result is the truth; run the correction if it is not."""
+        prompt = REVIEW.format(
+            card=self._card,
+            question=question,
+            players=players,
+            sql=sql,
+            filters=report.render() if report else "(the query has no WHERE filters to probe)",
+        )
+        try:
+            reply = self._client.complete(system=SYSTEM_PROMPT, prompt=prompt, temperature=0.0)
+            verdict, reason, revised = parse_review(reply)
+        except (LLMError, ValueError) as error:
+            LOGGER.info("empty-result review failed: %s", error)
+            return Review(UNREVIEWED, "", sql, error=str(error)), (), []
+        if revised is None:
+            return Review(verdict, reason, sql), (), []
+        try:
+            validated = guard.validate(extract_sql(revised), max_rows=self._max_rows)
+            columns, rows = self._execute(validated.sql)
+        except (guard.UnsafeSQLError, duckdb.Error) as error:
+            LOGGER.info("revised query rejected: %s", error)
+            return Review(verdict, reason, sql, revised, error=_describe(error)), (), []
+        found = 0 if holds_nothing(rows) else len(rows)
+        return Review(verdict, reason, sql, validated.sql, found), columns, rows
+
+    def _second_look(self, result: SQLAnswer, players: str) -> None:
+        """Review an empty ``result`` in place, and record it in the miss log."""
+        if result.sql is None:  # pragma: no cover - only called on a query that ran
+            return
+        report = filters.probe(self._connection, result.sql)
+        review: Review | None = None
+        if self._review_empty:
+            review, columns, rows = self._review(result.question, players, result.sql, report)
+            result.review = review
+            if review.revised and review.revised_sql is not None:
+                result.attempts.append(Attempt(sql=review.revised_sql))
+                result.sql, result.columns, result.rows = review.revised_sql, columns, rows
+                result.note = f"Revised query: {review.reason}" if review.reason else None
+            elif review.verdict == EXPECTED_EMPTY and review.reason:
+                result.note = _join(result.note, review.reason)
+            elif review.verdict == WRONG_QUERY:
+                # The model's diagnosis of a correction that failed is a guess; it goes to
+                # the miss log, not to the reader.
+                result.note = _join(result.note, CORRECTION_FOUND_NOTHING)
+        self._record(result, report, review)
+
+    def _record(
+        self, result: SQLAnswer, report: filters.FilterReport | None, review: Review | None
+    ) -> None:
+        if self._miss_log is None:
+            return
+        entry: dict[str, Any] = {
+            "question": result.question,
+            "sql": review.original_sql if review else result.sql,
+            "filters": report.as_dict() if report else None,
+            "note": result.note,
+            "model": getattr(self._client, "model", None),
+        }
+        if review is not None:
+            entry |= {
+                "verdict": review.verdict,
+                "reason": review.reason,
+                "revised_sql": review.revised_sql,
+                "revised_rows": review.revised_rows,
+                "error": review.error,
+            }
+        self._miss_log.record(entry)
+
     def _execute(self, sql: str) -> tuple[tuple[str, ...], list[tuple[object, ...]]]:
         # A cursor per query: DuckDB connections are not safe to share across threads.
         with self._connection.cursor() as cursor:
@@ -455,15 +636,18 @@ class TextToSQL:
                         LOGGER.info("attempt %d matched nothing: %s", attempt_number, note)
                         continue
             attempts.append(Attempt(sql=validated.sql))
-            return SQLAnswer(
+            result = SQLAnswer(
                 question=question,
                 sql=validated.sql,
                 columns=columns,
                 rows=rows,
                 attempts=attempts,
-                elapsed_seconds=time.perf_counter() - started,
                 note=note,
             )
+            if _is_empty(rows):
+                self._second_look(result, players)
+            result.elapsed_seconds = time.perf_counter() - started
+            return result
         return SQLAnswer(
             question=question,
             sql=None,

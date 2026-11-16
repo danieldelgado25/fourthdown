@@ -170,6 +170,27 @@
       "tags": ["unanswerable"],
       "reference_sql": null,
       "expect_unanswerable": true
+    },
+    {
+      "id": "empty-lions-super-bowl",
+      "question": "Which Super Bowls did the Detroit Lions play in?",
+      "tags": ["expected-empty", "postseason"],
+      "reference_sql": "SELECT season FROM games WHERE playoff_round = 'super_bowl' AND 'DET' IN (home_team, away_team)",
+      "expect_empty": true
+    },
+    {
+      "id": "empty-brady-2023",
+      "question": "How many rushing touchdowns did Tom Brady have in the 2023 season?",
+      "tags": ["expected-empty", "players"],
+      "reference_sql": "SELECT sum(touchdowns) FROM player_game WHERE season = 2023 AND season_type = 'REG' AND role = 'rusher' AND player_name = 'T.Brady'",
+      "expect_empty": true
+    },
+    {
+      "id": "empty-browns-2015-playoffs",
+      "question": "Who did the Cleveland Browns play in the 2015 playoffs?",
+      "tags": ["expected-empty", "postseason"],
+      "reference_sql": "SELECT game_id FROM games WHERE season = 2015 AND season_type = 'POST' AND 'CLE' IN (home_team, away_team)",
+      "expect_empty": true
     }
   ]
 }

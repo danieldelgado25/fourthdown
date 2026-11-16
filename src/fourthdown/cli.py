@@ -12,6 +12,7 @@ from typing import Annotated
 
 import typer
 
+from fourthdown import feedback
 from fourthdown.agent.assistant import Assistant
 from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter
 from fourthdown.agent.tools import Tool
@@ -764,6 +765,41 @@ def eval_routing_cmd(
     gates = [_gate(f"{r.name} routing accuracy", r.accuracy(), min_accuracy) for r in reports]
     if not all(gates):
         raise typer.Exit(code=1)
+
+
+@app.command("misses")
+def misses_cmd(
+    data_dir: DataDir = None,
+    verdict: Annotated[
+        str | None,
+        typer.Option(help="Only this verdict: expected_empty, wrong_query, or unreviewed."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", "-n", help="Most recent N records.")] = 20,
+    show_sql: Annotated[bool, typer.Option("--sql", help="Print each query.")] = False,
+) -> None:
+    """List questions whose query came back empty, newest last, with the review's verdict."""
+    path = data_paths(data_dir).feedback / feedback.FILENAME
+    records = [
+        record
+        for record in feedback.read(path)
+        if verdict is None or record.get("verdict", feedback.NOT_REVIEWED) == verdict
+    ]
+    if not records:
+        typer.echo(f"no empty results recorded in {path}")
+        return
+    for record in records[-limit:]:
+        outcome = record.get("verdict", feedback.NOT_REVIEWED)
+        if record.get("revised_rows"):
+            outcome += f", revised ({record['revised_rows']} rows)"
+        typer.echo(f"{record.get('at', '?')}  [{outcome}]  {record.get('question', '')}")
+        reason = record.get("reason") or record.get("error") or record.get("note")
+        if reason:
+            typer.echo(f"    {reason}")
+        if show_sql:
+            for key in ("sql", "revised_sql"):
+                if record.get(key):
+                    typer.echo(f"    {key}: " + " ".join(str(record[key]).split()))
+    typer.echo(f"{len(records)} record(s) in {path}")
 
 
 @app.command()

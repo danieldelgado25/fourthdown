@@ -53,7 +53,8 @@ llm:
 # Request threads per service pod; a slow LLM answer does not block fast ones.
 threads: 4
 
-# One entry per application service. `data` mounts the data volume read-only. Services
+# One entry per application service. `data` mounts the data volume read-only; `feedback`
+# also mounts its feedback/ directory writable, for the miss log. Services
 # start before their dependencies and heal as they appear (fourthdown.services.common).
 services:
   gateway:
@@ -68,6 +69,7 @@ services:
     port: 8001
     replicas: 1
     data: true
+    feedback: true
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits: {cpu: "1", memory: 2Gi}

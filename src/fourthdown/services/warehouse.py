@@ -27,6 +27,7 @@ from fourthdown.agent.parse import parse_season, parse_team
 from fourthdown.agent.tools import Evidence, Table, summarise
 from fourthdown.config import Paths, data_paths
 from fourthdown.data import warehouse
+from fourthdown.feedback import MissLog
 from fourthdown.llm import LLMClient, LLMError, default_client
 from fourthdown.rag.text_to_sql import TextToSQL
 from fourthdown.services.common import (
@@ -116,11 +117,21 @@ class StatsTool:
         rows = [list(row) for row in answer.rows[: self._max_rows]]
         empty = all(value is None for row in rows for value in row)
         no_rows = "No rows matched. Check the spelling of names and that the filters fit 2009-2024."
-        headline = (answer.note or no_rows) if empty else summarise(answer.columns, rows)
+        if empty:
+            headline = answer.note or no_rows
+        else:
+            headline = summarise(answer.columns, rows)
+            if answer.review is not None and answer.review.revised and answer.note:
+                headline = f"{headline}. {answer.note}"
+        detail = {"sql": answer.sql, "attempts": str(len(answer.attempts))}
+        if answer.review is not None:
+            detail["review"] = answer.review.verdict
+            if answer.review.revised:
+                detail["original_sql"] = answer.review.original_sql
         return Evidence(
             answer=headline,
             table=Table(columns=answer.columns, rows=rows),
-            detail={"sql": answer.sql, "attempts": str(len(answer.attempts))},
+            detail=detail,
         )
 
 
@@ -194,7 +205,8 @@ def opener(
         state.components["warehouse"] = True
         state.tools.append(TendencyTool(connection))
         if llm_ready:
-            state.tools.append(StatsTool(TextToSQL(connection, llm)))
+            chain = TextToSQL(connection, llm, miss_log=MissLog(resolved.feedback))
+            state.tools.append(StatsTool(chain))
         else:
             state.skipped["stats"] = "text-to-SQL needs the LLM, which is unavailable"
         return state

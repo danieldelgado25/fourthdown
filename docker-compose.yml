@@ -132,6 +132,8 @@ services:
     environment: *ollama
     volumes:
       - ./data:/data:ro
+      # The miss log (fourthdown.feedback), made by the pipeline; the only writable path.
+      - ./data/feedback:/data/feedback
 
   retrieval:
     build: { context: ., target: retrieval }
