@@ -191,6 +191,138 @@
       "tags": ["expected-empty", "postseason"],
       "reference_sql": "SELECT game_id FROM games WHERE season = 2015 AND season_type = 'POST' AND 'CLE' IN (home_team, away_team)",
       "expect_empty": true
+    },
+    {
+      "id": "team-third-down-leader",
+      "question": "Which team had the best third-down conversion rate in the 2021 regular season?",
+      "tags": ["ranking", "team_game"],
+      "reference_sql": "SELECT team FROM team_game WHERE season = 2021 AND season_type = 'REG' GROUP BY team ORDER BY sum(third_down_conversions) / sum(third_down_attempts) DESC LIMIT 1"
+    },
+    {
+      "id": "team-fourth-down-conversions",
+      "question": "How many fourth-down conversions did the Eagles have in the 2022 regular season?",
+      "tags": ["aggregate", "team_game"],
+      "reference_sql": "SELECT sum(fourth_down_conversions) FROM team_game WHERE season = 2022 AND season_type = 'REG' AND team = 'PHI'"
+    },
+    {
+      "id": "team-games-above-epa",
+      "question": "In how many 2023 regular season games did the Bills average more than 0.2 EPA per designed play?",
+      "tags": ["filtering", "team_game"],
+      "reference_sql": "SELECT count(*) FROM team_game WHERE season = 2023 AND season_type = 'REG' AND team = 'BUF' AND epa_per_play > 0.2"
+    },
+    {
+      "id": "team-most-interceptions",
+      "question": "Which team's offense threw the most interceptions in the 2018 regular season?",
+      "tags": ["ranking", "team_game"],
+      "reference_sql": "SELECT team FROM team_game WHERE season = 2018 AND season_type = 'REG' GROUP BY team ORDER BY sum(interceptions) DESC LIMIT 1"
+    },
+    {
+      "id": "team-fumbles-lost",
+      "question": "How many fumbles did the Giants lose in the 2019 regular season?",
+      "tags": ["aggregate", "team_game"],
+      "reference_sql": "SELECT sum(fumbles_lost) FROM team_game WHERE season = 2019 AND season_type = 'REG' AND team = 'NYG'"
+    },
+    {
+      "id": "team-best-game-epa",
+      "question": "Which team had the single best offensive game by EPA per designed play in 2020, and against whom?",
+      "tags": ["ranking", "team_game"],
+      "reference_sql": "SELECT team, opponent FROM team_game WHERE season = 2020 ORDER BY epa_per_play DESC LIMIT 1"
+    },
+    {
+      "id": "drive-count",
+      "question": "How many offensive drives did the Bengals have in the 2021 regular season?",
+      "tags": ["aggregate", "drives"],
+      "reference_sql": "SELECT count(*) FROM drives WHERE season = 2021 AND season_type = 'REG' AND posteam = 'CIN'"
+    },
+    {
+      "id": "drive-punt-share",
+      "question": "What share of drives ended in a punt in the 2022 regular season?",
+      "tags": ["aggregate", "drives"],
+      "reference_sql": "SELECT avg((drive_result = 'Punt')::INT) FROM drives WHERE season = 2022 AND season_type = 'REG'"
+    },
+    {
+      "id": "drive-td-share-leader",
+      "question": "Which team scored a touchdown on the highest share of its drives in the 2020 regular season?",
+      "tags": ["ranking", "drives"],
+      "reference_sql": "SELECT posteam FROM drives WHERE season = 2020 AND season_type = 'REG' GROUP BY posteam ORDER BY avg(scored_touchdown::INT) DESC LIMIT 1"
+    },
+    {
+      "id": "drive-turnover-on-downs",
+      "question": "How many drives ended in a turnover on downs in the 2023 regular season?",
+      "tags": ["aggregate", "drives"],
+      "reference_sql": "SELECT count(*) FROM drives WHERE season = 2023 AND season_type = 'REG' AND drive_result = 'Turnover on downs'"
+    },
+    {
+      "id": "games-outdoors",
+      "question": "How many 2022 regular season games were played outdoors?",
+      "tags": ["aggregate", "games"],
+      "reference_sql": "SELECT count(*) FROM games WHERE season = 2022 AND season_type = 'REG' AND roof = 'outdoors'"
+    },
+    {
+      "id": "games-highest-scoring",
+      "question": "How many points were scored in the highest-scoring game of the 2015 regular season?",
+      "tags": ["extreme", "games"],
+      "reference_sql": "SELECT max(total_points) FROM games WHERE season = 2015 AND season_type = 'REG'"
+    },
+    {
+      "id": "games-home-losses",
+      "question": "How many home games did the Packers lose in the 2018 regular season?",
+      "tags": ["aggregate", "games"],
+      "reference_sql": "SELECT count(*) FROM games WHERE season = 2018 AND season_type = 'REG' AND home_team = 'GB' AND home_margin < 0"
+    },
+    {
+      "id": "player-rushing-leader",
+      "question": "Who led the league in rushing yards in the 2016 regular season?",
+      "tags": ["ranking", "player_game"],
+      "reference_sql": "SELECT player_name FROM player_game WHERE season = 2016 AND season_type = 'REG' AND role = 'rusher' GROUP BY player_id, player_name ORDER BY sum(yards) DESC LIMIT 1"
+    },
+    {
+      "id": "player-receiving-tds",
+      "question": "How many receiving touchdowns did Tyreek Hill have in the 2020 regular season?",
+      "tags": ["players", "player_game"],
+      "reference_sql": "SELECT sum(touchdowns) FROM player_game WHERE season = 2020 AND season_type = 'REG' AND role = 'receiver' AND full_name = 'Tyreek Hill'"
+    },
+    {
+      "id": "player-single-game-passing",
+      "question": "Which quarterback threw for the most yards in a single game in the 2022 regular season?",
+      "tags": ["extreme", "player_game"],
+      "reference_sql": "SELECT player_name FROM player_game WHERE season = 2022 AND season_type = 'REG' AND role = 'passer' ORDER BY yards DESC LIMIT 1"
+    },
+    {
+      "id": "player-100-yard-games",
+      "question": "How many games with at least 100 receiving yards did Justin Jefferson have in the 2022 regular season?",
+      "tags": ["filtering", "player_game"],
+      "reference_sql": "SELECT count(*) FROM player_game WHERE season = 2022 AND season_type = 'REG' AND role = 'receiver' AND full_name = 'Justin Jefferson' AND yards >= 100"
+    },
+    {
+      "id": "player-completions",
+      "question": "How many passes did Joe Burrow complete in the 2021 regular season?",
+      "tags": ["players", "player_game"],
+      "reference_sql": "SELECT sum(completions) FROM player_game WHERE season = 2021 AND season_type = 'REG' AND role = 'passer' AND full_name = 'Joe Burrow'"
+    },
+    {
+      "id": "plays-sacks",
+      "question": "How many sacks did the Steelers' defense record in the 2019 regular season?",
+      "tags": ["aggregate", "plays"],
+      "reference_sql": "SELECT sum(sack::INT) FROM plays WHERE season = 2019 AND season_type = 'REG' AND defteam = 'PIT'"
+    },
+    {
+      "id": "plays-air-yards",
+      "question": "What was the Raiders' average air yards per pass attempt in the 2021 regular season?",
+      "tags": ["aggregate", "plays"],
+      "reference_sql": "SELECT avg(air_yards) FROM plays WHERE season = 2021 AND season_type = 'REG' AND posteam = 'LV' AND air_yards IS NOT NULL"
+    },
+    {
+      "id": "plays-punts",
+      "question": "How many punts were there in the 2023 regular season?",
+      "tags": ["aggregate", "plays"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2023 AND season_type = 'REG' AND punt_attempt = 1"
+    },
+    {
+      "id": "players-position",
+      "question": "What position does Travis Kelce play?",
+      "tags": ["players"],
+      "reference_sql": "SELECT position FROM players WHERE full_name = 'Travis Kelce'"
     }
   ]
 }
