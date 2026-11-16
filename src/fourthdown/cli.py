@@ -802,6 +802,23 @@ def misses_cmd(
     typer.echo(f"{len(records)} record(s) in {path}")
 
 
+@app.command("queries")
+def queries_cmd(
+    data_dir: DataDir = None,
+    hours: Annotated[
+        float | None, typer.Option("--hours", help="Only the last N hours; all when omitted.")
+    ] = None,
+    slowest: Annotated[int, typer.Option(help="List this many slowest questions.")] = 3,
+) -> None:
+    """Summarise every question the gateway answered: latency, errors, and route mix."""
+    path = data_paths(data_dir).feedback / feedback.QUERIES_FILENAME
+    records = feedback.since(feedback.read(path), hours)
+    if not records:
+        typer.echo(f"no queries recorded in {path}")
+        return
+    typer.echo(feedback.summarise(records, slowest=slowest).render())
+
+
 @app.command()
 def build(
     seasons: Seasons = DEFAULT_SEASONS,
