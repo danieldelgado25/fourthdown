@@ -137,6 +137,14 @@ condition removed, and the model reviews those counts: either the answer is trul
   question, both queries, the counts, and the verdict (`fourthdown misses`). The warehouse
   service mounts only that directory writable; a failed write never fails the answer.
 
+**Every question is measured.** The gateway appends one line per `/api/ask` to
+`data/feedback/queries.jsonl`: the tool, who chose it (`keyword`, `llm`, `caller`,
+`fallback`), latency, whether SQL ran, the row count and whether the rows were empty, the
+review verdict, any error, and whether a guest asked. It is the same best-effort JSONL
+writer as the miss log, so the gateway gains a writable `feedback/` mount and still reads
+no data. `fourthdown queries` reports nearest-rank p50/p95 latency, the error and empty
+rates, and the route mix, with `--hours` for a recent window.
+
 **A held-out set keeps the tuning honest.** Prompt changes made while looking at 15
 questions can memorise them. `golden_holdout.json` holds 15 different questions, written
 and scored before any tuning and never used to choose card text or exemplars. The

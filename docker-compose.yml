@@ -159,6 +159,9 @@ services:
       FOURTHDOWN_SERVICES: http://warehouse:8001,http://retrieval:8002,http://models:8003
     ports:
       - "8000:8000"
+    volumes:
+      # The query log (fourthdown.feedback); the gateway reads no other data.
+      - ./data/feedback:/data/feedback
 
   # The provenance-checked win-probability image (`make wp-image` after training).
   winprob:

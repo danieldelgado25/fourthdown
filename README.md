@@ -81,7 +81,10 @@ fourthdown misses                            # newest empty results and their ve
 fourthdown misses --verdict wrong_query --sql   # the ones the review had to correct
 ```
 
-A real miss there becomes a golden question or a schema-card rule. The golden set includes
+A real miss there becomes a golden question or a schema-card rule. The gateway also
+records every question in `data/feedback/queries.jsonl` (route, latency, whether SQL ran,
+rows, errors), and `fourthdown queries --hours 24` summarises it: p50/p95 latency, error
+rate, empty rate, and the route mix. The golden set includes
 questions whose correct answer is nothing (the Lions in a Super Bowl), so a review that
 "fixes" a true empty by dropping a filter fails the evaluation.
 
