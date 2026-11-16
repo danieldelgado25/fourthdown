@@ -325,6 +325,31 @@ The demo runs exactly this, on the smallest VM the hosted-model setup allows:
 | Data | the 2009-2024 warehouse and trained models, built on the VM by the pipeline job; 2009-2024 game and postseason-drive narratives indexed in pgvector |
 | Cost | stopped (deallocated) between demos, so it bills by the hour only while running; every service restarts on boot |
 
+#### Starting, stopping, and automatic shutdown
+
+A VM shut down from inside the OS stays allocated and keeps billing; only a deallocate
+stops the meter. From a laptop with the Azure CLI:
+
+```bash
+export AZ_RESOURCE_GROUP=<resource group> AZ_VM=<vm name>
+deploy/azure/vm.sh start           # boots; every service comes back on its own
+deploy/azure/vm.sh status          # "VM running" or "VM deallocated"
+deploy/azure/vm.sh stop            # deallocate
+deploy/azure/setup.sh --email you@example.com   # once: both automatic shutdowns below
+```
+
+`setup.sh` (run once, `DRY_RUN=1` to see the commands first) sets up two shutdowns that
+both deallocate:
+
+- **a daily schedule** at `--time` UTC (default 0500), the CLI form of the portal's
+  auto-shutdown toggle, with a warning email 30 minutes before;
+- **an idle shutdown**: it gives the VM a managed identity with the Virtual Machine
+  Contributor role on itself only, which the `idle-shutdown` service in
+  `docker-compose.prod.yml` uses to deallocate the VM after `FOURTHDOWN_IDLE_MINUTES`
+  (default 60) with no question asked and nobody logged in over SSH. The clock restarts
+  at every boot. `FOURTHDOWN_IDLE_ACTION=log` only reports, and `FOURTHDOWN_IDLE_MINUTES=0`
+  turns it off. Its decisions are in `dc logs idle-shutdown`.
+
 ### Running it on Kubernetes
 
 `deploy/helm/fourthdown` runs the four services as Deployments, Postgres and Ollama as

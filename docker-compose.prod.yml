@@ -38,6 +38,21 @@ services:
       FOURTHDOWN_GUEST_IP_DAILY_LIMIT: ${FOURTHDOWN_GUEST_IP_DAILY_LIMIT:-}
       FOURTHDOWN_GUEST_DAILY_LIMIT: ${FOURTHDOWN_GUEST_DAILY_LIMIT:-}
 
+  # Deallocates this Azure VM (so it stops billing) after FOURTHDOWN_IDLE_MINUTES without a
+  # question and with nobody logged in over SSH; see fourthdown.serving.idle. Needs the
+  # managed identity deploy/azure/setup.sh grants; without it, it only logs the failure.
+  idle-shutdown:
+    <<: *restart
+    image: ghcr.io/danieldelgado25/fourthdown-gateway:${FOURTHDOWN_TAG:-latest}
+    profiles: [app]
+    command: ["python", "-m", "fourthdown.serving.idle"]
+    environment:
+      FOURTHDOWN_IDLE_MINUTES: ${FOURTHDOWN_IDLE_MINUTES:-60}
+      FOURTHDOWN_IDLE_ACTION: ${FOURTHDOWN_IDLE_ACTION:-deallocate}
+    volumes:
+      - ./data/feedback:/data/feedback:ro   # the gateway's query log: the activity signal
+      - /run/utmp:/host/utmp:ro             # who is logged in, so SSH work is never cut off
+
   caddy:
     image: caddy:2.10
     profiles: [app]
