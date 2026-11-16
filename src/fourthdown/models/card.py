@@ -38,6 +38,9 @@ class ModelCard:
     package_version: str
     mlflow_run_id: str | None = None
     mlflow_tracking_uri: str | None = None
+    registered_model: str | None = None
+    registered_version: int | None = None
+    """Set by `fourthdown.models.registry.promote` on the card it installs for serving."""
 
     @classmethod
     def build(
