@@ -335,6 +335,84 @@
       "question": "What position does Travis Kelce play?",
       "tags": ["players"],
       "reference_sql": "SELECT position FROM players WHERE full_name = 'Travis Kelce'"
+    },
+    {
+      "id": "penalties-on-offense",
+      "question": "How many plays with the Cowboys on offense drew a penalty in the 2023 regular season?",
+      "tags": ["aggregate", "extra-column"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2023 AND season_type = 'REG' AND posteam = 'DAL' AND penalty"
+    },
+    {
+      "id": "air-yards-team-leader",
+      "question": "Which team averaged the most air yards per pass in the 2022 regular season?",
+      "tags": ["ranking", "extra-column"],
+      "reference_sql": "SELECT posteam FROM plays WHERE season = 2022 AND season_type = 'REG' AND air_yards IS NOT NULL GROUP BY posteam ORDER BY avg(air_yards) DESC LIMIT 1"
+    },
+    {
+      "id": "longest-field-goal",
+      "question": "How long was the longest made field goal of the 2019 regular season?",
+      "tags": ["extreme", "extra-column"],
+      "reference_sql": "SELECT max(kick_distance) FROM plays WHERE season = 2019 AND season_type = 'REG' AND field_goal_result = 'made'"
+    },
+    {
+      "id": "team-sacks-defense",
+      "question": "How many sacks did the Steelers defense record in the 2020 regular season?",
+      "tags": ["aggregate", "extra-column"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2020 AND season_type = 'REG' AND defteam = 'PIT' AND sack"
+    },
+    {
+      "id": "most-interceptions-thrown-team",
+      "question": "Which team threw the most interceptions in the 2012 regular season?",
+      "tags": ["ranking", "extra-column"],
+      "reference_sql": "SELECT posteam FROM plays WHERE season = 2012 AND season_type = 'REG' AND interception GROUP BY posteam ORDER BY count(*) DESC LIMIT 1"
+    },
+    {
+      "id": "pass-rate-over-expected-leader",
+      "question": "Which team had the highest pass rate over expected in the 2021 regular season?",
+      "tags": ["ranking", "extra-column"],
+      "reference_sql": "SELECT posteam FROM plays WHERE season = 2021 AND season_type = 'REG' AND is_designed_play GROUP BY posteam ORDER BY avg(pass_oe) DESC LIMIT 1"
+    },
+    {
+      "id": "two-point-attempts",
+      "question": "How many two-point conversions did the Eagles attempt in the 2024 regular season?",
+      "tags": ["aggregate", "extra-column"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2024 AND season_type = 'REG' AND posteam = 'PHI' AND two_point_attempt"
+    },
+    {
+      "id": "qb-scrambles",
+      "question": "How many times did Lamar Jackson scramble in the 2023 regular season?",
+      "tags": ["player", "extra-column"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2023 AND season_type = 'REG' AND qb_scramble AND rusher_player_name = 'L.Jackson' AND posteam = 'BAL'"
+    },
+    {
+      "id": "overtime-games",
+      "question": "How many regular-season games went to overtime in 2022?",
+      "tags": ["aggregate", "extra-column"],
+      "reference_sql": "SELECT count(DISTINCT game_id) FROM plays WHERE season = 2022 AND season_type = 'REG' AND game_half = 'Overtime'"
+    },
+    {
+      "id": "yards-after-catch-leader",
+      "question": "Who gained the most yards after the catch in the 2020 regular season?",
+      "tags": ["ranking", "extra-column"],
+      "reference_sql": "SELECT receiver_player_name FROM plays WHERE season = 2020 AND season_type = 'REG' AND yards_after_catch IS NOT NULL GROUP BY receiver_player_id, receiver_player_name ORDER BY sum(yards_after_catch) DESC LIMIT 1"
+    },
+    {
+      "id": "fumbles-lost-team",
+      "question": "How many fumbles did the Giants lose in the 2021 regular season?",
+      "tags": ["aggregate", "extra-column"],
+      "reference_sql": "SELECT count(*) FROM plays WHERE season = 2021 AND season_type = 'REG' AND posteam = 'NYG' AND fumble_lost"
+    },
+    {
+      "id": "team-rushing-yards-box-score",
+      "question": "How many rushing yards did the Bears have in the 2022 regular season?",
+      "tags": ["aggregate", "box-score"],
+      "reference_sql": "SELECT sum(yards) FROM player_game WHERE season = 2022 AND season_type = 'REG' AND role = 'rusher' AND team = 'CHI'"
+    },
+    {
+      "id": "super-bowl-lvii-winner",
+      "question": "Who won Super Bowl LVII?",
+      "tags": ["playoffs", "super-bowl"],
+      "reference_sql": "SELECT CASE WHEN home_margin > 0 THEN home_team ELSE away_team END AS winner FROM games WHERE season = 2022 AND playoff_round = 'super_bowl'"
     }
   ]
 }

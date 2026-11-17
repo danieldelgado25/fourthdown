@@ -186,6 +186,39 @@ sample at temperatures above zero. Treat two held-out questions as noise. These 
 the same weights forced onto the CPU (`num_gpu 0`). Every number the model's answers
 stated was in its result (`text_to_sql.grounded` = 1.0).
 
+**Ask a question is database access, so the whole warehouse has to be reachable.** Three
+changes follow from treating it that way rather than as a demo of the questions it was
+tuned on:
+
+- *Totals come from the box score.* "Most rushing yards in 2025" summed designed runs in
+  `plays` (BAL, 2,372) where the box score says BUF, 2,714. The card now says yards,
+  touchdowns, and catches are `player_game` sums by role, grouped by team for a team, and
+  an exemplar shows a team passing-yards leader.
+- *Facts go to the warehouse.* "Super Bowl" alone was a narrative cue, so "who won Super
+  Bowl LX" was answered from generated summaries. Who won, winners, champions, and
+  leaders are now stats cues; how a game unfolded stays on narrative.
+- *Every `plays` column is reachable without a bigger card.* The card names 37 of the 117
+  columns. Each of the others has cues (its own name read as words, plus phrases such as
+  "penalties" or "pass rate over expected"), and the up to 12 a question matches are
+  listed after the card with notes on their values (`schema_card.relevant`). The prompt
+  grows only for questions that need it. Touchdown and conversion flags have no cues:
+  `player_game` and `team_game` hold those totals, and listing the `plays` flags beside
+  them pulled the model off the right view.
+
+Thirteen development questions cover them (penalties, air yards, field-goal distance,
+sacks, interceptions, pass rate over expected, two-point tries, scrambles, overtime,
+yards after the catch, lost fumbles, a box-score team total, a Super Bowl winner).
+
+| run (qwen2.5-coder:7b, CPU) | development (68) | held-out |
+| --- | --- | --- |
+| before | 39/68 | 9/15 |
+| box score + routing + per-question columns | 44/68 | 9/15 |
+
+The gain is seven questions (the box-score leader, both sack questions, penalties,
+field-goal distance, two-point tries, overtime) against four losses. Two losses were the
+touchdown and conversion cues described above, removed after this run and rechecked by
+hand on those two questions; the other two are repair-loop spread.
+
 ## Narrative retrieval (phase 03)
 
 ```
@@ -273,7 +306,7 @@ team-season's EPA per play.
 name from the catalog of tools that actually loaded; a keyword router sits underneath it
 and answers whenever the model is unreachable, returns prose, or names a tool that does
 not exist. Both are measured against the same labelled question set
-([routing_eval.md](routing_eval.md)), and they score the same 19/20 — which is the point:
+([routing_eval.md](routing_eval.md)), and they scored the same 19/20 — which is the point:
 the fallback is not a degraded mode, it is a cheap router the LLM has to beat.
 
 **Tools return evidence, not prose.** Every tool produces the same envelope — an answer

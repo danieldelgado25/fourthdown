@@ -37,6 +37,7 @@ from fourthdown.feedback import MissLog
 from fourthdown.llm import LLMClient, LLMError
 from fourthdown.narrative.teams import TEAM_NAMES
 from fourthdown.rag import names, schema_card
+from fourthdown.rag.schema_card import Column
 from fourthdown.sql import filters, guard
 
 LOGGER = logging.getLogger(__name__)
@@ -87,6 +88,12 @@ EXEMPLARS: tuple[tuple[str, str], ...] = (
         "sum(completions) AS receptions, sum(plays) AS targets "
         "FROM player_game WHERE season = 2020 AND season_type = 'REG' AND role = 'receiver' "
         "AND player_name ILIKE 'S.%Diggs' GROUP BY player_id, player_name",
+    ),
+    (
+        "Which team had the most passing yards in 2018?",
+        "SELECT team, sum(yards) AS passing_yards FROM player_game WHERE season = 2018 "
+        "AND season_type = 'REG' AND role = 'passer' GROUP BY team "
+        "ORDER BY passing_yards DESC LIMIT 1",
     ),
     (
         "Who did the Bears play in week 3 of 2015, and what was the score?",
@@ -402,6 +409,8 @@ class TextToSQL:
         self._miss_log = miss_log
         self._card = schema_card.build(connection)
         self._view_columns = schema_card.view_columns(connection)
+        self._all_columns = schema_card.view_columns(connection, full=True)
+        self._extras = schema_card.plays_extras(connection)
         self._names = names.NameResolver(names.load_roster(connection))
         span = connection.execute("SELECT min(season), max(season) FROM plays").fetchone()
         self.coverage: tuple[int, int] | None = (
@@ -412,23 +421,33 @@ class TextToSQL:
     def schema_card(self) -> str:
         return self._card
 
-    def _column_hint(self, failed: Attempt) -> str:
+    def extra_columns(self, question: str) -> list[Column]:
+        """The `plays` columns left off the card that this question needs."""
+        return schema_card.relevant(question, self._extras)
+
+    def card_for(self, question: str) -> str:
+        """The schema card, with the left-out columns this question needs listed after it."""
+        block = schema_card.render_relevant(self.extra_columns(question))
+        return f"{self._card}\n\n{block}" if block else self._card
+
+    def _column_hint(self, failed: Attempt, extra: tuple[str, ...] = ()) -> str:
         """Spell out the columns of the views a failed query touched.
 
         Hallucinated columns are the dominant failure, and the model cannot see which of
         its names were invented from the error alone. A column borrowed from the wrong view
-        is named outright, with the view that does have it.
+        is named outright, with the view that does have it. ``extra`` is the left-out
+        `plays` columns this question was shown, listed with the card's own.
         """
         words = {word.lower() for word in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", failed.sql)}
         lines = [
-            f"{view}: {', '.join(self._view_columns[view])}"
+            f"{view}: {', '.join(self._view_columns[view] + (extra if view == 'plays' else ()))}"
             for view in sorted(guard.ALLOWED_VIEWS & words)
         ]
         hint = "\nColumns that exist:\n" + "\n".join(lines) + "\n" if lines else ""
         missing = _MISSING_COLUMN.search(failed.error or "")
         if missing:
             column = missing.group(1).lower()
-            owners = [view for view, names in self._view_columns.items() if column in names]
+            owners = [view for view, names in self._all_columns.items() if column in names]
             hint += (
                 f"{column} is only a column of {', '.join(owners)}.\n"
                 if owners
@@ -484,19 +503,20 @@ class TextToSQL:
     def _generate(
         self, question: str, players: str, failures: list[Attempt], temperature: float
     ) -> str:
+        card = self.card_for(question)
         prompt = (
-            PROMPT.format(
-                card=self._card, examples=render_examples(), question=question, players=players
-            )
+            PROMPT.format(card=card, examples=render_examples(), question=question, players=players)
             if not failures
             else REPAIR.format(
-                card=self._card,
+                card=card,
                 question=question,
                 players=players,
                 failures="\n".join(
                     f"SQL: {failed.sql}\nError: {failed.error}" for failed in failures
                 ),
-                hint=self._column_hint(failures[-1]),
+                hint=self._column_hint(
+                    failures[-1], tuple(column.name for column in self.extra_columns(question))
+                ),
             )
         )
         response = self._client.complete(
@@ -509,7 +529,7 @@ class TextToSQL:
     ) -> tuple[Review, tuple[str, ...], list[tuple[object, ...]]]:
         """Ask whether an empty result is the truth; run the correction if it is not."""
         prompt = REVIEW.format(
-            card=self._card,
+            card=self.card_for(question),
             question=question,
             players=players,
             sql=sql,

@@ -47,8 +47,30 @@ def test_keyword_router_sends_what_happened_questions_to_narrative(tools):
     assert KeywordRouter(tools).route("What happened in the 2017 Super Bowl?").tool == "narrative"
 
 
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Who won Super Bowl LX?",
+        "Which team won the 2019 Super Bowl?",
+        "Who was the Super Bowl champion in 2015?",
+        "Who won the 2018 NFC championship game?",
+    ],
+)
+def test_keyword_router_sends_facts_about_a_super_bowl_to_stats(tools, question):
+    # The warehouse is the source of record; game summaries are for how a game unfolded.
+    assert KeywordRouter(tools).route(question).tool == "stats"
+
+
+@pytest.mark.parametrize(
+    "question",
+    ["How did the Patriots come back to win Super Bowl LI?", "Tell me about Super Bowl LI"],
+)
+def test_keyword_router_keeps_how_a_super_bowl_unfolded_on_narrative(tools, question):
+    assert KeywordRouter(tools).route(question).tool == "narrative"
+
+
 def test_keyword_router_defaults_to_stats(tools):
-    route = KeywordRouter(tools).route("Who threw the most interceptions in 2012?")
+    route = KeywordRouter(tools).route("What was the league average EPA per play in 2012?")
     assert route.tool == "stats"
     assert "statistics" in route.reason
 
@@ -96,7 +118,7 @@ def test_hybrid_router_answers_cued_questions_without_the_model(tools):
 
 def test_hybrid_router_asks_the_model_when_there_is_no_cue(tools):
     client = ScriptedClient("narrative")
-    route = HybridRouter(tools, client).route("How did the Colts blow their lead in 2022?")
+    route = HybridRouter(tools, client).route("Why did the Colts fall apart in 2022?")
     assert (route.tool, route.decided_by) == ("narrative", "llm")
 
 

@@ -159,3 +159,27 @@ def test_repair_says_when_a_column_exists_nowhere(views_connection) -> None:
     )
     TextToSQL(views_connection, client).answer("How many plays?")
     assert "made_up_column is not a column of any view" in client.prompts[1]
+
+
+def test_the_prompt_lists_left_out_columns_the_question_needs(views_connection) -> None:
+    client = ScriptedClient("SELECT count(*) FROM plays WHERE penalty")
+    TextToSQL(views_connection, client).answer("How many penalties were called in 2023?")
+    assert "More plays columns, for this question:\n  penalty bool" in client.prompts[0]
+
+
+def test_the_prompt_lists_no_extra_columns_when_none_are_needed(views_connection) -> None:
+    client = ScriptedClient("SELECT count(*) FROM plays")
+    TextToSQL(views_connection, client).answer("How many plays?")
+    assert "More plays columns" not in client.prompts[0]
+
+
+def test_repair_knows_a_left_out_plays_column_exists(views_connection) -> None:
+    # air_yards is off the card, but it is a real column: borrowing it from drives is a
+    # wrong view, not an invented name.
+    client = ScriptedClient(
+        "SELECT avg(air_yards) FROM drives",
+        "SELECT avg(air_yards) FROM plays",
+    )
+    TextToSQL(views_connection, client, review=False).answer("Average air yards?")
+    assert "air_yards is only a column of plays" in client.prompts[1]
+    assert "air_yards" in client.prompts[1].split("Columns that exist:")[1]
