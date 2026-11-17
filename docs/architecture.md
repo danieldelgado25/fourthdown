@@ -214,6 +214,7 @@ yards after the catch, lost fumbles, a box-score team total, a Super Bowl winner
 | before | 39/68 | 9/15 |
 | box score + routing + per-question columns | 44/68 | 9/15 |
 | without touchdown and conversion cues | 46/68 | 9/15 |
+| + `team` rule, repair hints, single-row check | 46/68 | 9/15 |
 
 The gain is seven questions (the box-score leader, both sack questions, penalties,
 field-goal distance, two-point tries, overtime). The first run also lost four; two were
@@ -222,6 +223,19 @@ gone. Three losses remain against the baseline. Two are queries that group `driv
 `plays` by `team`, a column only the box-score views have, which the new box-score rule
 ("GROUP BY team for a team") probably invites; one sums `total_points` over a season
 instead of taking the top game.
+
+Those three were fixed without more prompt rules where code could decide. The box-score
+rule now says only `player_game` and `team_game` have `team`, and a repair hint gives the
+view's own spelling ("drives has no team; use posteam or defteam") rather than only the
+views that own the column, which had sent the model to `team_game` without
+`scored_touchdown`. Two query shapes that always mean a mistake go back for repair before
+they run: an aggregate without GROUP BY under ORDER BY (a season's `sum(total_points)`
+for "the highest-scoring game"), and a two-point try, punt, field goal, or extra point
+counted under `is_designed_play`, which no such play is. All three questions pass in the
+rerun, and the development total stays 46/68: three others flipped, two of which
+(`coldest-game`, `most-pass-happy-neutral`) have flipped between runs before. The third,
+`two-point-attempts`, was the `is_designed_play` shape, fixed after the run and checked
+by hand on three phrasings. The held-out misses are the same six as before.
 
 ## Narrative retrieval (phase 03)
 

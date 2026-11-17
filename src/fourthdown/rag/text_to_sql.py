@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import duckdb
+import sqlglot
+from sqlglot import exp
 
 from fourthdown.agent import parse
 from fourthdown.feedback import MissLog
@@ -88,6 +90,11 @@ EXEMPLARS: tuple[tuple[str, str], ...] = (
         "sum(completions) AS receptions, sum(plays) AS targets "
         "FROM player_game WHERE season = 2020 AND season_type = 'REG' AND role = 'receiver' "
         "AND player_name ILIKE 'S.%Diggs' GROUP BY player_id, player_name",
+    ),
+    (
+        "How many plays did the longest drive of 2017 take?",
+        "SELECT drive_id, plays FROM drives WHERE season = 2017 AND season_type = 'REG' "
+        "ORDER BY plays DESC LIMIT 1",
     ),
     (
         "Which team had the most passing yards in 2018?",
@@ -197,6 +204,88 @@ TEAM_CODE_ALIASES: dict[str, str] = {
     "CLV": "CLE",
     "BLT": "BAL",
     "HST": "HOU",
+}
+
+
+SINGLE_ROW_ORDERING = (
+    "An aggregate without GROUP BY returns one row, so ORDER BY and LIMIT do nothing here. "
+    "For the top row, ORDER BY the column itself (no sum or max) with LIMIT 1; to rank "
+    "groups, GROUP BY what is ranked."
+)
+
+
+def single_row_ordering(sql: str) -> str | None:
+    """Why ``sql`` sorts a result that can only be one row, or ``None`` if it does not.
+
+    ``SELECT sum(total_points) FROM games ... ORDER BY total_points DESC LIMIT 1`` runs and
+    returns the season's total where the question asked for its top game. The shape is
+    always a mistake: without GROUP BY an aggregate collapses everything to one row, and
+    ordering one row means the query was meant to pick a row it no longer has.
+    """
+    try:
+        tree = sqlglot.parse_one(sql, read="duckdb")
+    except sqlglot.errors.ParseError:
+        return None
+    if not isinstance(tree, exp.Select) or tree.args.get("group") or not tree.args.get("order"):
+        return None
+    for projection in tree.expressions:
+        for function in projection.find_all(exp.AggFunc):
+            if function.find_ancestor(exp.Window, exp.Subquery) is None:
+                return SINGLE_ROW_ORDERING
+    return None
+
+
+# Flags no designed play carries (checked on 2009-2025: zero overlap), so filtering one of
+# them together with is_designed_play can only ever count nothing.
+NEVER_DESIGNED = ("two_point_attempt", "punt_attempt", "field_goal_attempt", "extra_point_attempt")
+
+
+def _true_flags(sql: str) -> set[str]:
+    """Columns the outer WHERE requires to be true: ``AND flag``, ``flag = 1``, ``flag = TRUE``."""
+    flags = set()
+    for condition in filters.conditions(sql):
+        if isinstance(condition, exp.Paren):
+            condition = condition.this
+        if isinstance(condition, exp.Column):
+            flags.add(condition.name.lower())
+        elif (
+            isinstance(condition, exp.EQ)
+            and isinstance(condition.this, exp.Column)
+            and condition.expression.sql().lower() in ("1", "true")
+        ):
+            flags.add(condition.this.name.lower())
+    return flags
+
+
+def contradictory_flags(sql: str) -> str | None:
+    """Why ``sql`` filters on flags no row has together, or ``None``."""
+    try:
+        flags = _true_flags(sql)
+        tree = sqlglot.parse_one(sql, read="duckdb")
+    except sqlglot.errors.ParseError:
+        return None
+    # Summing or counting the flag under is_designed_play is the same mistake.
+    if isinstance(tree, exp.Select):
+        flags |= {
+            column.name.lower()
+            for projection in tree.expressions
+            for column in projection.find_all(exp.Column)
+        }
+    clashing = [flag for flag in NEVER_DESIGNED if flag in flags]
+    if "is_designed_play" in flags and clashing:
+        return (
+            f"{clashing[0]} plays are never designed plays, so this filter can only count "
+            "nothing. Drop is_designed_play."
+        )
+    return None
+
+
+# The same idea spelled differently by different views, for repair hints.
+COLUMN_SPELLINGS: dict[str, tuple[str, ...]] = {
+    "team": ("posteam", "defteam"),
+    "posteam": ("team",),
+    "opponent": ("defteam",),
+    "defteam": ("opponent",),
 }
 
 
@@ -453,6 +542,17 @@ class TextToSQL:
                 if owners
                 else f"{column} is not a column of any view.\n"
             )
+            # Naming the owners alone sends the model to a view that lacks the rest of
+            # its query (drives.scored_touchdown -> team_game); the same view's own
+            # spelling of the column is usually the fix.
+            for view in sorted(guard.ALLOWED_VIEWS & words):
+                spelled = [
+                    name
+                    for name in COLUMN_SPELLINGS.get(column, ())
+                    if name in self._all_columns.get(view, ())
+                ]
+                if spelled and column not in self._all_columns.get(view, ()):
+                    hint += f"{view} has no {column}; use {' or '.join(spelled)}.\n"
         return hint
 
     def out_of_range(self, question: str) -> str | None:
@@ -636,6 +736,11 @@ class TextToSQL:
                 )
             try:
                 validated = guard.validate(raw, max_rows=self._max_rows)
+                shape = single_row_ordering(validated.sql) or contradictory_flags(validated.sql)
+                if shape and attempt_number < self._max_attempts:
+                    attempts.append(Attempt(sql=validated.sql, error=shape))
+                    LOGGER.info("attempt %d rejected: %s", attempt_number, shape)
+                    continue
                 columns, rows = self._execute(validated.sql)
             except (guard.UnsafeSQLError, duckdb.Error) as error:
                 attempts.append(Attempt(sql=raw, error=_describe(error)))

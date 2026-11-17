@@ -7,7 +7,12 @@ from conftest import ScriptedClient
 
 from fourthdown.evaluation import harness
 from fourthdown.rag import text_to_sql
-from fourthdown.rag.text_to_sql import TextToSQL
+from fourthdown.rag.text_to_sql import (
+    SINGLE_ROW_ORDERING,
+    TextToSQL,
+    contradictory_flags,
+    single_row_ordering,
+)
 from fourthdown.sql import guard
 
 
@@ -183,3 +188,67 @@ def test_repair_knows_a_left_out_plays_column_exists(views_connection) -> None:
     TextToSQL(views_connection, client, review=False).answer("Average air yards?")
     assert "air_yards is only a column of plays" in client.prompts[1]
     assert "air_yards" in client.prompts[1].split("Columns that exist:")[1]
+
+
+def test_repair_gives_the_views_own_spelling_of_a_borrowed_column(views_connection) -> None:
+    # Naming team_game as the owner of `team` alone sent the model to a view without
+    # scored_touchdown; drives spells it posteam.
+    client = ScriptedClient(
+        "SELECT team, avg(scored_touchdown::INT) FROM drives GROUP BY team",
+        "SELECT posteam, avg(scored_touchdown::INT) FROM drives GROUP BY posteam",
+    )
+    TextToSQL(views_connection, client, review=False).answer("Best touchdown rate per drive?")
+    assert "drives has no team; use posteam or defteam." in client.prompts[1]
+
+
+@pytest.mark.parametrize(
+    ("sql", "flagged"),
+    [
+        ("SELECT sum(total_points) AS p FROM games ORDER BY p DESC LIMIT 1", True),
+        ("SELECT max(total_points) FROM games ORDER BY 1 LIMIT 1", True),
+        ("SELECT game_id, total_points FROM games ORDER BY total_points DESC LIMIT 1", False),
+        ("SELECT team, sum(yards) AS y FROM player_game GROUP BY team ORDER BY y DESC", False),
+        ("SELECT sum(total_points) FROM games", False),
+        ("SELECT game_id, sum(total_points) OVER () AS s FROM games ORDER BY s", False),
+    ],
+)
+def test_ordering_a_single_aggregate_row_is_flagged(sql, flagged) -> None:
+    assert (single_row_ordering(sql) is not None) is flagged
+
+
+def test_a_single_aggregate_row_with_ordering_goes_back_for_repair(views_connection) -> None:
+    client = ScriptedClient(
+        "SELECT sum(total_points) AS p FROM games ORDER BY p DESC LIMIT 1",
+        "SELECT game_id, total_points FROM games ORDER BY total_points DESC LIMIT 1",
+    )
+    answer = TextToSQL(views_connection, client, review=False).answer("Highest-scoring game?")
+    assert answer.attempts[0].error == SINGLE_ROW_ORDERING
+    assert answer.sql is not None and "sum(" not in answer.sql.lower()
+
+
+@pytest.mark.parametrize(
+    ("sql", "flagged"),
+    [
+        ("SELECT count(*) FROM plays WHERE two_point_attempt AND is_designed_play", True),
+        (
+            "SELECT count(*) FROM plays WHERE punt_attempt = 1 AND is_designed_play",
+            True,
+        ),
+        ("SELECT sum(two_point_attempt::INT) FROM plays WHERE is_designed_play", True),
+        ("SELECT count(*) FROM plays WHERE two_point_attempt", False),
+        ("SELECT avg(success::INT) FROM plays WHERE down = 3 AND is_designed_play", False),
+        ("SELECT count(*) FROM plays WHERE is_designed_play OR punt_attempt", False),
+    ],
+)
+def test_never_designed_flags_with_is_designed_play_are_flagged(sql, flagged) -> None:
+    assert (contradictory_flags(sql) is not None) is flagged
+
+
+def test_a_contradictory_filter_goes_back_for_repair(views_connection) -> None:
+    client = ScriptedClient(
+        "SELECT count(*) FROM plays WHERE two_point_attempt AND is_designed_play",
+        "SELECT count(*) FROM plays WHERE two_point_attempt",
+    )
+    answer = TextToSQL(views_connection, client, review=False).answer("Two-point tries?")
+    assert "Drop is_designed_play" in (answer.attempts[0].error or "")
+    assert answer.sql is not None and "is_designed_play" not in answer.sql

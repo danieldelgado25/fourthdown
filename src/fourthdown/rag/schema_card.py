@@ -217,6 +217,8 @@ EXTRA_NOTES: dict[str, str] = {
     "yards_after_catch": "completions only",
     "field_goal_result": "'made', 'missed', or 'blocked'; NULL unless field_goal_attempt",
     "kick_distance": "yards of a field goal, punt, or kickoff",
+    "two_point_attempt": "a two-point try; not a designed play, so never add is_designed_play",
+    "extra_point_attempt": "an extra-point kick; not a designed play",
     "kicker_player_name": "abbreviated, not unique: 'J.Tucker'",
     "punter_player_name": "abbreviated, not unique: 'J.Hekker'",
     "roof": "'outdoors', 'dome', 'closed', or 'open'",
@@ -292,13 +294,13 @@ Rules:
 - A matchup: 'KC' IN (home_team, away_team) AND 'LA' IN (home_team, away_team).
 - Count plays with count(*) on plays; only the other views have a `plays` column.
 - Yards, TDs, and catches (totals, leaders, a team's rushing or passing yards) are
-  box-score sums of player_game by role, GROUP BY team for a team; not plays.
+  box-score sums of player_game by role; not plays. Only player_game and team_game
+  have a `team` column; plays and drives use posteam.
 - Rates are averages of booleans cast to INT: `avg(is_pass_call::INT)`. Wrap a
   comparison in parentheses before casting: `avg((yards_gained >= 10)::INT)`.
-- Add ORDER BY and LIMIT when the question asks for the most, fewest, or a ranking.
-- To find the row with an extreme value (coldest game, top passer), ORDER BY that value
-  with LIMIT 1 and select its identifying column (game_id, team, player_name) beside it.
-  Never pair independent MIN() or MAX() aggregates.
+- The most, fewest, or a ranking: ORDER BY the value with LIMIT, selecting its
+  identifying column (game_id, posteam, player_name) beside it. Never pair
+  independent MIN() or MAX() aggregates.
 - To compare one situation with another or with the rest, GROUP BY the flag or
   expression that separates them and return one row per group."""
 
