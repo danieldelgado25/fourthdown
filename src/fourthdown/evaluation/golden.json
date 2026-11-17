@@ -193,6 +193,12 @@
       "expect_empty": true
     },
     {
+      "id": "super-bowl-lx-winner",
+      "question": "Who won Super Bowl LX, and what was the score?",
+      "tags": ["postseason", "games", "season-2025"],
+      "reference_sql": "SELECT CASE WHEN home_score > away_score THEN home_team ELSE away_team END AS winner FROM games WHERE season = 2025 AND playoff_round = 'super_bowl'"
+    },
+    {
       "id": "team-third-down-leader",
       "question": "Which team had the best third-down conversion rate in the 2021 regular season?",
       "tags": ["ranking", "team_game"],

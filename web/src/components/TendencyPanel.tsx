@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { api, type Tendencies } from "../api";
 
-const SEASONS = Array.from({ length: 16 }, (_, index) => 2024 - index);
+const SEASONS = Array.from({ length: 17 }, (_, index) => 2025 - index);
 
 export function TendencyPanel({ enabled }: { enabled: boolean }) {
-  const [season, setSeason] = useState(2024);
+  const [season, setSeason] = useState(2025);
   const [data, setData] = useState<Tendencies | null>(null);
   const [error, setError] = useState<string | null>(null);
 

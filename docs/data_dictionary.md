@@ -64,7 +64,7 @@ convention now and by the feature-builder in phase 04.
 - **Season length changes.** 256 regular-season games per year through 2020, 272 from
   2021 (17-game season). Per-season totals are not comparable without normalising.
 - **Relocations are back-filled.** nflverse normalises team abbreviations to their current
-  form across all history: there is no `SD`, `STL`, or `OAK` anywhere in 2009-2024, only
+  form across all history: there is no `SD`, `STL`, or `OAK` anywhere in 2009-2025, only
   `LAC`, `LA`, and `LV` (32 distinct values total). Convenient for joins, but it means a
   question about "the San Diego Chargers in 2013" must be mapped to `LAC`, and any answer
   should say so rather than silently renaming history. The alias table belongs in the

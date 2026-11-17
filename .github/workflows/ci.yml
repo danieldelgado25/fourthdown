@@ -86,9 +86,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/raw
-          key: nflverse-pbp-2009-2024-v1
+          key: nflverse-pbp-2009-2025-v1
       - name: Build every season the models are scored on
-        run: fourthdown build --seasons 2009-2024
+        run: fourthdown build --seasons 2009-2025
       - name: Scorecard (offline suites, gated by src/fourthdown/evaluation/gates.json)
         run: make scorecard-ci
       - name: Verify the data against its provenance manifest

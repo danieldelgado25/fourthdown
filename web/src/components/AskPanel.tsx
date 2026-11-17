@@ -33,7 +33,7 @@ export function AskPanel({ tools }: { tools: string[] }) {
   return (
     <section>
       <form onSubmit={submit}>
-        <label htmlFor="question">Ask anything about 2009-2024 play-by-play</label>
+        <label htmlFor="question">Ask anything about 2009-2025 play-by-play</label>
         <textarea
           id="question"
           value={question}

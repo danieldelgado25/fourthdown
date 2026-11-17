@@ -99,7 +99,7 @@ class NarrativeTool:
         return (
             f"No game summaries match {asked or 'that question'}. The narrative index covers "
             f"the {span} season{'s' if first != last else ''}; score and schedule questions "
-            "can go to the stats tool, which covers 2009-2024."
+            "can go to the stats tool, which covers 2009-2025."
         )
 
 

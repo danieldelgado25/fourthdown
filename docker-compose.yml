@@ -90,7 +90,7 @@ services:
     build: { context: ., target: pipeline }
     profiles: [pipeline]
     environment:
-      FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-2024}
+      FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-2025}
       FOURTHDOWN_TRAIN_ARGS: ${FOURTHDOWN_TRAIN_ARGS:-}
     volumes:
       - ./data:/data
@@ -108,7 +108,7 @@ services:
       FOURTHDOWN_PG_DSN: *dsn
       # Every season the warehouse holds, so narrative questions about 2016 find 2016.
       # --missing-only embeds just the seasons not indexed yet, so a rerun is cheap.
-      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2009-2024}
+      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2009-2025}
     command:
       - sh
       - -c

@@ -31,7 +31,7 @@ data:
 pipeline:
   # Seasons to download and warehouse. Training uses the documented split unless
   # trainArgs overrides it (e.g. "--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024").
-  seasons: "2009-2024"
+  seasons: "2009-2025"
   trainArgs: ""
   backoffLimit: 2
   resources:
@@ -118,7 +118,7 @@ postgres:
 index:
   # Embeds game and postseason-drive narratives; needs Ollama.
   enabled: true
-  seasons: "2024"
+  seasons: "2025"
   waitTimeoutSeconds: 3600
   resources:
     requests: {cpu: 100m, memory: 512Mi}

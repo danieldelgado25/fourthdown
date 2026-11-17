@@ -1,6 +1,6 @@
 # fourthdown
 
-A retrieval-augmented analytics assistant over 768,085 NFL plays (2009-2024, nflverse).
+A retrieval-augmented analytics assistant over 816,856 NFL plays (2009-2025, nflverse).
 
 Ask it a number and it writes SQL. Ask it what happened and it retrieves narrative. Ask it
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
@@ -22,7 +22,7 @@ day. How it runs is under [The live deployment](#the-live-deployment).
 
 ```bash
 make install                 # venv + editable install with dev extras
-make build                   # download 2009-2024, transform, build the warehouse (~10 min, ~1.5 GB)
+make build                   # download 2009-2025, transform, build the warehouse (~10 min, ~1.5 GB)
 make audit                   # regenerate docs/data_audit.md
 ```
 
@@ -310,7 +310,7 @@ dc --profile app pull && dc --profile app up -d --no-build
 
 The first run hands `./data` to uid 10001, the user every image runs as (the
 `data-owner` step), then builds the warehouse and trains in place. The index covers
-`FOURTHDOWN_INDEX_SEASONS` (default 2009-2024). The index step embeds only seasons not
+`FOURTHDOWN_INDEX_SEASONS` (default 2009-2025). The index step embeds only seasons not
 yet in the index (`--missing-only`), so rerunning that line after widening it is cheap.
 Updating is the last line again; when a release changes the views, run the first line
 too (with the app stopped), since the pipeline redefines them even when the data is current. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
@@ -337,7 +337,7 @@ The demo runs exactly this, on the smallest VM the hosted-model setup allows:
 | Network | a static public IP; the firewall admits only SSH, 80, and 443 |
 | Chat model | `openai/gpt-oss-120b` on Groq's OpenAI-compatible API, so answers take seconds |
 | Embeddings | `nomic-embed-text` on the bundled Ollama, CPU only |
-| Data | the 2009-2024 warehouse and trained models, built on the VM by the pipeline job; 2009-2024 game and postseason-drive narratives indexed in pgvector |
+| Data | the 2009-2025 warehouse and trained models, built on the VM by the pipeline job; 2009-2025 game and postseason-drive narratives indexed in pgvector |
 | Cost | stopped (deallocated) between demos, so it bills by the hour only while running; every service restarts on boot |
 
 #### Starting, stopping, and automatic shutdown
@@ -412,7 +412,7 @@ make scorecard-ci                            # what CI runs: offline suites, all
 Every harness reports to one scorecard, which is checked against the bounds in
 [gates.json](src/fourthdown/evaluation/gates.json). Each bound records why it is there,
 and some are ceilings: a win-probability AUC above 0.95 on held-out seasons points to a
-leaked feature, not a better model. On every pull request, CI rebuilds the 2009-2024
+leaked feature, not a better model. On every pull request, CI rebuilds the 2009-2025
 warehouse and runs the SQL guard against 36 adversarial queries. It also scores keyword
 routing, runs every golden reference query, and retrains all three models from scratch.
 The scorecard is published to the job summary. Text-to-SQL and LLM routing run in
