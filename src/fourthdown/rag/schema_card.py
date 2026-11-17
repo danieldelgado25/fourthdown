@@ -217,6 +217,8 @@ EXTRA_NOTES: dict[str, str] = {
     "yards_after_catch": "completions only",
     "field_goal_result": "'made', 'missed', or 'blocked'; NULL unless field_goal_attempt",
     "kick_distance": "yards of a field goal, punt, or kickoff",
+    "two_point_attempt": "a two-point try; not a designed play, so never add is_designed_play",
+    "extra_point_attempt": "an extra-point kick; not a designed play",
     "kicker_player_name": "abbreviated, not unique: 'J.Tucker'",
     "punter_player_name": "abbreviated, not unique: 'J.Hekker'",
     "roof": "'outdoors', 'dome', 'closed', or 'open'",

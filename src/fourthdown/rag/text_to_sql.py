@@ -235,6 +235,51 @@ def single_row_ordering(sql: str) -> str | None:
     return None
 
 
+# Flags no designed play carries (checked on 2009-2025: zero overlap), so filtering one of
+# them together with is_designed_play can only ever count nothing.
+NEVER_DESIGNED = ("two_point_attempt", "punt_attempt", "field_goal_attempt", "extra_point_attempt")
+
+
+def _true_flags(sql: str) -> set[str]:
+    """Columns the outer WHERE requires to be true: ``AND flag``, ``flag = 1``, ``flag = TRUE``."""
+    flags = set()
+    for condition in filters.conditions(sql):
+        if isinstance(condition, exp.Paren):
+            condition = condition.this
+        if isinstance(condition, exp.Column):
+            flags.add(condition.name.lower())
+        elif (
+            isinstance(condition, exp.EQ)
+            and isinstance(condition.this, exp.Column)
+            and condition.expression.sql().lower() in ("1", "true")
+        ):
+            flags.add(condition.this.name.lower())
+    return flags
+
+
+def contradictory_flags(sql: str) -> str | None:
+    """Why ``sql`` filters on flags no row has together, or ``None``."""
+    try:
+        flags = _true_flags(sql)
+        tree = sqlglot.parse_one(sql, read="duckdb")
+    except sqlglot.errors.ParseError:
+        return None
+    # Summing or counting the flag under is_designed_play is the same mistake.
+    if isinstance(tree, exp.Select):
+        flags |= {
+            column.name.lower()
+            for projection in tree.expressions
+            for column in projection.find_all(exp.Column)
+        }
+    clashing = [flag for flag in NEVER_DESIGNED if flag in flags]
+    if "is_designed_play" in flags and clashing:
+        return (
+            f"{clashing[0]} plays are never designed plays, so this filter can only count "
+            "nothing. Drop is_designed_play."
+        )
+    return None
+
+
 # The same idea spelled differently by different views, for repair hints.
 COLUMN_SPELLINGS: dict[str, tuple[str, ...]] = {
     "team": ("posteam", "defteam"),
@@ -691,7 +736,7 @@ class TextToSQL:
                 )
             try:
                 validated = guard.validate(raw, max_rows=self._max_rows)
-                shape = single_row_ordering(validated.sql)
+                shape = single_row_ordering(validated.sql) or contradictory_flags(validated.sql)
                 if shape and attempt_number < self._max_attempts:
                     attempts.append(Attempt(sql=validated.sql, error=shape))
                     LOGGER.info("attempt %d rejected: %s", attempt_number, shape)
