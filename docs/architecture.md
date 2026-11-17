@@ -384,6 +384,17 @@ response then carries the data version, run id, and artifact hash, and the image
 carry the same ids, so a probability can be traced from the response back to the run and
 the source files.
 
+**The demo VM turns itself off.** It bills by the hour while allocated, and shutting the
+OS down does not deallocate it. The `idle-shutdown` service (`serving/idle.py`, in the
+gateway image) checks once a minute: no question in the gateway's query log for an hour,
+measured from the later of the last question and the service's own start, and no
+`USER_PROCESS` entry in the host's `utmp` (mounted read-only, so an SSH session holds
+the VM up). Then it gets a token for the VM's managed identity from the instance metadata
+service and calls Resource Manager's `deallocate` on its own resource id, which it also
+reads from the metadata service. No credential is stored on the machine, and the role
+`deploy/azure/setup.sh` grants is scoped to that one VM. A failed call (no identity yet,
+or off Azure) is logged and retried after another idle window, never every minute.
+
 ## Containers and Kubernetes (phase 07b)
 
 One Dockerfile with a target per service (`make images`), plus the model image. None of
