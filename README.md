@@ -64,7 +64,10 @@ Accuracy is measured by executing the golden questions and comparing results wit
 handwritten reference SQL, not by matching query text. The prompt was tuned on a
 15-question development set and checked on 15 held-out questions it never saw:
 `qwen2.5-coder:7b` went from 7/15 to 14/15 correct on development and from 3/15 to 9/15
-on held-out. Per-question results are in [docs/text_to_sql_eval.md](docs/text_to_sql_eval.md)
+on held-out. The development set has since grown to 68 questions covering every view and
+the `plays` columns the schema card leaves out, which a question gets listed when it needs
+them; the current score is 44/68, and 9/15 held-out. Per-question results are in
+[docs/text_to_sql_eval.md](docs/text_to_sql_eval.md)
 and [docs/text_to_sql_holdout_eval.md](docs/text_to_sql_holdout_eval.md).
 
 A query that runs but matches nothing gets one more look. It is rerun with each `WHERE`
@@ -216,9 +219,11 @@ make eval-routing                            # -> docs/routing_eval.md
 
 Routing is LLM-first with a deterministic keyword router underneath: the model is asked
 for exactly one tool name, and an unparseable, unknown, or unreachable answer falls back
-to keywords rather than failing the request. On a 20-question golden set both routers
-score 19/20 ([docs/routing_eval.md](docs/routing_eval.md)), which is the argument for
-keeping the cheap one as the fallback.
+to keywords rather than failing the request. On the original 20-question golden set both
+routers scored 19/20 ([docs/routing_eval.md](docs/routing_eval.md)), which is the argument
+for keeping the cheap one as the fallback. Facts the warehouse holds, Super Bowl winners
+included, route to SQL; the game summaries answer how a game unfolded. The set is now 29
+questions, and the keyword router scores 29/29.
 
 Every dependency is optional at startup. Missing Postgres drops the narrative tool,
 missing model artifacts drop the advisor, missing Ollama drops LLM routing — the API
@@ -466,7 +471,7 @@ src/fourthdown/
     harness.py        result-level scoring and the Markdown report
     golden_retrieval.json  16 narrative questions with the games that answer them
     retrieval_harness.py   hit@1 / recall@k / MRR for hybrid vs dense vs lexical
-    golden_routing.json    20 questions labelled with the tool that should answer them
+    golden_routing.json    29 questions labelled with the tool that should answer them
     routing_harness.py     keyword vs LLM routing accuracy and misroutes
     golden_guard.json      adversarial, legitimate, and row-cap cases for the SQL guard
     suites.py              each harness as a scorecard suite, skipped when its service is absent

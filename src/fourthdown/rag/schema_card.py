@@ -177,11 +177,6 @@ EXTRA_CUES: dict[str, tuple[str, ...]] = {
     "interception": ("intercept", "pick"),
     "sack": ("sack",),
     "fumble_lost": ("fumbl",),
-    "pass_touchdown": ("touchdown pass", "passing touchdown", "td pass", "passing td"),
-    "rush_touchdown": ("rushing touchdown", "rushing td", "rush td"),
-    "third_down_converted": ("third down conversion", "converted on third", "convert"),
-    "fourth_down_converted": ("fourth down conversion", "convert"),
-    "fourth_down_failed": ("fourth down conversion", "convert", "turnover on downs"),
     "field_goal_attempt": ("field goal", "fg", "kicker"),
     "field_goal_result": ("field goal", "fg", "kicker"),
     "kick_distance": ("field goal", "fg", "kicker", "punt", "longest kick", "yard kick"),
@@ -204,6 +199,9 @@ EXTRA_CUES: dict[str, tuple[str, ...]] = {
     "xyac_epa": ("expected yac", "expected yards after", "xyac"),
     "xyac_mean_yardage": ("expected yac", "expected yards after", "xyac"),
 }
+
+# Deliberately cue-less: touchdowns and conversions have box-score columns in player_game
+# and team_game, and listing the plays flags beside them pulled the model off those views.
 
 # What a name does not say about a left-out column. Kept apart from COLUMN_NOTES, which
 # would print beside same-named columns of the other views and cost card space.
