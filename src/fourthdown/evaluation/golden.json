@@ -199,6 +199,12 @@
       "reference_sql": "SELECT CASE WHEN home_score > away_score THEN home_team ELSE away_team END AS winner FROM games WHERE season = 2025 AND playoff_round = 'super_bowl'"
     },
     {
+      "id": "team-rushing-leader-2025",
+      "question": "Which team had the most rushing yards in the 2025 regular season?",
+      "tags": ["ranking", "box-score", "season-2025"],
+      "reference_sql": "SELECT team FROM player_game WHERE season = 2025 AND season_type = 'REG' AND role = 'rusher' GROUP BY team ORDER BY sum(yards) DESC LIMIT 1"
+    },
+    {
       "id": "team-third-down-leader",
       "question": "Which team had the best third-down conversion rate in the 2021 regular season?",
       "tags": ["ranking", "team_game"],
