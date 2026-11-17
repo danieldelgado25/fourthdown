@@ -86,3 +86,13 @@ def test_suggested_columns_render_with_their_notes(views_connection) -> None:
     assert "field_goal_result " in block
     assert "# 'made', 'missed', or 'blocked'" in block
     assert schema_card.render_relevant([]) == ""
+
+
+def test_cues_do_not_fire_on_player_first_names(views_connection) -> None:
+    # "pat" (point after touchdown) once matched "Patrick", and "edge" "Edgerrin".
+    for question in (
+        "What was Patrick Mahomes' completion count in 2022?",
+        "How many rushing yards did Edgerrin James have in 2009?",
+        "How many passes did Joe Burrow complete in 2021?",
+    ):
+        assert _names(question, views_connection) == []
