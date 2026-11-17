@@ -32,6 +32,7 @@ from typing import Any
 
 import duckdb
 
+from fourthdown.agent import parse
 from fourthdown.feedback import MissLog
 from fourthdown.llm import LLMClient, LLMError
 from fourthdown.narrative.teams import TEAM_NAMES
@@ -595,7 +596,7 @@ class TextToSQL:
                 note=refusal,
                 elapsed_seconds=time.perf_counter() - started,
             )
-        players = names.hint(self._names.resolve(question))
+        players = names.hint(self._names.resolve(question)) + parse.super_bowl_hint(question)
         for attempt_number in range(1, self._max_attempts + 1):
             temperature = (
                 0.0

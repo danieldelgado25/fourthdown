@@ -15,6 +15,7 @@ import polars as pl
 import pytest
 from conftest import ScriptedClient
 
+from fourthdown.agent import parse
 from fourthdown.agent.parse import is_postseason, parse_seasons, parse_teams, parse_week
 from fourthdown.agent.router import KeywordRouter
 from fourthdown.data import etl, warehouse
@@ -380,3 +381,29 @@ def test_a_wrong_team_code_is_retried_with_the_right_one(views_connection):
     answer = TextToSQL(views_connection, client).answer("Rams points?")
     assert len(answer.attempts) == 2
     assert "'LAR' is not a team code; use 'LA'" in client.prompts[1]
+
+
+# --- Super Bowl numerals ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Who won Super Bowl LX?", [("Super Bowl LX", 60, 2025)]),
+        ("points in super bowl liii", [("super bowl liii", 53, 2018)]),
+        ("Super Bowl 50 MVP", [("Super Bowl 50", 50, 2015)]),
+        (
+            "Super Bowl XLIX and Super Bowl XLIV",
+            [("Super Bowl XLIX", 49, 2014), ("Super Bowl XLIV", 44, 2009)],
+        ),
+        ("the super bowl champions in 2019", []),
+    ],
+)
+def test_super_bowl_numerals_name_their_season(question, expected):
+    assert parse.super_bowls(question) == expected
+
+
+def test_the_super_bowl_season_is_handed_to_the_model(views_connection):
+    client = ScriptedClient("SELECT game_id FROM games LIMIT 1")
+    TextToSQL(views_connection, client, review=False).answer("Who won Super Bowl LX?")
+    assert "is the 2025 season: season = 2025 AND playoff_round = 'super_bowl'" in client.prompts[0]
