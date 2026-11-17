@@ -2,13 +2,13 @@
 
 - questions: 15
 - produced a runnable query: 15/15
-- correct result: 9/15
+- correct result: 10/15
 - repair attempts used: 2
 
 | question | correct | detail |
 | --- | --- | --- |
 | bills-neutral-pass-rate | no | expected [(0.6877551020408164,)], got [(0.8823529411764706,)] |
-| highest-run-rate | no | expected [('BAL',)], got [('PHI', 1.0)] |
+| highest-run-rate | yes | matches reference |
 | fourth-down-success-rate | yes | matches reference |
 | backed-up-drives | no | expected [(452,)], got [(31,)] |
 | highest-scoring-game | yes | matches reference |
