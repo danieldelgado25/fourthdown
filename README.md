@@ -66,7 +66,7 @@ handwritten reference SQL, not by matching query text. The prompt was tuned on a
 `qwen2.5-coder:7b` went from 7/15 to 14/15 correct on development and from 3/15 to 9/15
 on held-out. The development set has since grown to 68 questions covering every view and
 the `plays` columns the schema card leaves out, which a question gets listed when it needs
-them; the current score is 46/68, and 9/15 held-out. Per-question results are in
+them; the current score is 47/68, and 10/15 held-out. Per-question results are in
 [docs/text_to_sql_eval.md](docs/text_to_sql_eval.md)
 and [docs/text_to_sql_holdout_eval.md](docs/text_to_sql_holdout_eval.md).
 

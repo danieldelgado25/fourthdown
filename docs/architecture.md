@@ -215,6 +215,7 @@ yards after the catch, lost fumbles, a box-score team total, a Super Bowl winner
 | box score + routing + per-question columns | 44/68 | 9/15 |
 | without touchdown and conversion cues | 46/68 | 9/15 |
 | + `team` rule, repair hints, single-row check | 46/68 | 9/15 |
+| + two-point and kick check | 47/68 | 10/15 |
 
 The gain is seven questions (the box-score leader, both sack questions, penalties,
 field-goal distance, two-point tries, overtime). The first run also lost four; two were
@@ -234,8 +235,9 @@ for "the highest-scoring game"), and a two-point try, punt, field goal, or extra
 counted under `is_designed_play`, which no such play is. All three questions pass in the
 rerun, and the development total stays 46/68: three others flipped, two of which
 (`coldest-game`, `most-pass-happy-neutral`) have flipped between runs before. The third,
-`two-point-attempts`, was the `is_designed_play` shape, fixed after the run and checked
-by hand on three phrasings. The held-out misses are the same six as before.
+`two-point-attempts`, was the `is_designed_play` shape; with that check in, a full rerun
+scores 47/68 and 10/15. Against the 39/68 baseline that is ten questions gained and one
+lost (`player-completions`, which the model declined to answer).
 
 ## Narrative retrieval (phase 03)
 
