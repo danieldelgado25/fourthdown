@@ -32,6 +32,7 @@ from typing import Any
 
 import duckdb
 
+from fourthdown.agent import parse
 from fourthdown.feedback import MissLog
 from fourthdown.llm import LLMClient, LLMError
 from fourthdown.narrative.teams import TEAM_NAMES
@@ -52,29 +53,32 @@ single word UNANSWERABLE."""
 EXEMPLARS: tuple[tuple[str, str], ...] = (
     (
         "Which game had the strongest wind in 2019, and how strong was it?",
-        "SELECT game_id, wind FROM games WHERE season = 2019 AND wind IS NOT NULL "
+        "SELECT game_id, wind FROM games WHERE season = 2019 AND season_type = 'REG' "
+        "AND wind IS NOT NULL "
         "ORDER BY wind DESC LIMIT 1",
     ),
     (
         "Which receiver gained the most yards in 2021 among those with at least 100 targets?",
         "SELECT player_name, sum(yards) AS yards FROM player_game WHERE season = 2021 "
-        "AND role = 'receiver' GROUP BY player_id, player_name HAVING sum(plays) >= 100 "
-        "ORDER BY yards DESC LIMIT 1",
+        "AND season_type = 'REG' AND role = 'receiver' GROUP BY player_id, player_name "
+        "HAVING sum(plays) >= 100 ORDER BY yards DESC LIMIT 1",
     ),
     (
         "How does the Eagles' pass rate on third down compare with other downs in 2022?",
         "SELECT down = 3 AS third_down, avg(is_pass_call::INT) AS pass_rate FROM plays "
-        "WHERE season = 2022 AND posteam = 'PHI' AND is_designed_play "
+        "WHERE season = 2022 AND season_type = 'REG' AND posteam = 'PHI' AND is_designed_play "
         "GROUP BY third_down ORDER BY third_down",
     ),
     (
         "What was the Packers' success rate on third and short in 2019?",
         "SELECT avg(success::INT) AS success_rate FROM plays WHERE season = 2019 "
+        "AND season_type = 'REG' "
         "AND posteam = 'GB' AND down = 3 AND distance_bucket = 'short' AND is_designed_play",
     ),
     (
         "What was the Dolphins' EPA per play over the 2022 season?",
-        "SELECT avg(epa) AS epa_per_play FROM plays WHERE season = 2022 AND posteam = 'MIA' "
+        "SELECT avg(epa) AS epa_per_play FROM plays WHERE season = 2022 AND season_type = 'REG' "
+        "AND posteam = 'MIA' "
         "AND is_designed_play",
     ),
     (
@@ -592,7 +596,7 @@ class TextToSQL:
                 note=refusal,
                 elapsed_seconds=time.perf_counter() - started,
             )
-        players = names.hint(self._names.resolve(question))
+        players = names.hint(self._names.resolve(question)) + parse.super_bowl_hint(question)
         for attempt_number in range(1, self._max_attempts + 1):
             temperature = (
                 0.0

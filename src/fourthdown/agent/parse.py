@@ -118,6 +118,46 @@ def parse_week(question: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+_SUPER_BOWL = re.compile(r"\bsuper\s*bowl\s+([ivxlc]+|\d{1,2})\b", re.IGNORECASE)
+_ROMAN_VALUES = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100}
+FIRST_SUPER_BOWL_SEASON = 1966
+"""Super Bowl I closed the 1966 season, so Super Bowl N is season 1965 + N."""
+
+
+def _roman(numeral: str) -> int | None:
+    total = 0
+    values = [_ROMAN_VALUES[char] for char in numeral.lower()]
+    for position, value in enumerate(values):
+        following = values[position + 1] if position + 1 < len(values) else 0
+        total += -value if value < following else value
+    return total or None
+
+
+def super_bowls(question: str) -> list[tuple[str, int, int]]:
+    """Each Super Bowl the question names, as ``(as written, number, season)``.
+
+    "Super Bowl LX" and "Super Bowl 60" are both the 2025 season. Models get the numeral
+    arithmetic wrong (LX became 2023 in evaluation), so it is done here, like the player
+    lookup, and handed to the model as a fact.
+    """
+    found = []
+    for match in _SUPER_BOWL.finditer(question):
+        token = match.group(1)
+        number = int(token) if token.isdigit() else _roman(token)
+        if number:
+            found.append((match.group(0), number, FIRST_SUPER_BOWL_SEASON - 1 + number))
+    return found
+
+
+def super_bowl_hint(question: str) -> str:
+    """Lines for the text-to-SQL prompt naming each Super Bowl's season; empty if none."""
+    return "".join(
+        f"{written} (number {number}) is the {season} season: "
+        f"season = {season} AND playoff_round = 'super_bowl'.\n"
+        for written, number, season in super_bowls(question)
+    )
+
+
 def is_postseason(question: str) -> bool:
     """True for Super Bowl and playoff phrasing, where a year may name the season before."""
     return _POSTSEASON.search(question) is not None

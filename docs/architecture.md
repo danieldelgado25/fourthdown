@@ -162,6 +162,30 @@ of the development improvement is fitting, and the held-out number is the one to
 Its remaining misses are listed in
 [text_to_sql_holdout_eval.md](text_to_sql_holdout_eval.md).
 
+**The examples teach more than the rules.** The development set grew to 55 questions so
+every view is covered (team_game and players had none). Rerunning it found that the
+held-out score had fallen to 1/15. The references had since adopted the regular-season
+convention, and the schema card stated it, but five of the six season-scoped worked
+examples left out `season_type = 'REG'`. The model copied the examples, not the rule, and
+counted playoff games; four of the misses matched the reference exactly once the filter
+was dropped. Adding the filter to those examples was the whole fix. A second fix moves
+Super Bowl numerals out of the model's hands: `parse.super_bowls` reads "Super Bowl LX"
+as season 2025 and the prompt states it, as it does for player ids, because the model
+did the arithmetic wrong.
+
+| run (qwen2.5-coder:7b) | development | held-out |
+| --- | --- | --- |
+| before (55-question set) | 28/54 | 1/15 |
+| regular-season examples | 33/54 | 9/15 |
+| + Super Bowl numerals | 35/54 | 9-11/15 |
+| final scorecard, 55 questions | 36/55 | 9/15 |
+
+Held-out prompts are identical with and without the numeral hint (no held-out question
+names a Super Bowl), so its 9-to-11 is run-to-run spread from the repair attempts, which
+sample at temperatures above zero. Treat two held-out questions as noise. These runs used
+the same weights forced onto the CPU (`num_gpu 0`). Every number the model's answers
+stated was in its result (`text_to_sql.grounded` = 1.0).
+
 ## Narrative retrieval (phase 03)
 
 ```
