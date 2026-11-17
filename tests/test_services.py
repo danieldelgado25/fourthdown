@@ -8,7 +8,9 @@ import pytest
 import requests
 from flask import Flask
 
+from fourthdown import feedback
 from fourthdown.agent.tools import Evidence, Passage, Table, evidence_from_json, evidence_json
+from fourthdown.feedback import QueryLog
 from fourthdown.llm import LLMError
 from fourthdown.models.fourth_down import FourthDownAdvisor, PuntModel
 from fourthdown.models.winprob import GameState
@@ -356,3 +358,23 @@ def test_gateway_serves_the_dashboard_without_cors(http, tmp_path, monkeypatch):
     client = gateway.create_app(catalog, DownLLM(), http).test_client()
     assert b"root" in client.get("/").data
     assert "Access-Control-Allow-Origin" not in client.get("/api/health").headers
+
+
+def test_gateway_records_every_ask_in_the_query_log(http, tmp_path):
+    log = QueryLog(tmp_path)
+    catalog = gateway.Catalog(["http://warehouse", "http://retrieval", "http://models"], http)
+    api = gateway.create_app(catalog, DownLLM(), http, query_log=log).test_client()
+    assert api.post("/api/ask", json={"question": "how many sacks in 2023?"}).status_code == 200
+    (record,) = list(feedback.read(log.path))
+    assert record["question"] == "how many sacks in 2023?"
+    assert record["tool"] == "stats" and record["decided_by"] == "keyword"
+    assert record["sql_ran"] and record["rows"] == 1 and not record["empty"]
+    assert not record["failed"] and record["elapsed_ms"] >= 0
+
+
+def test_gateway_records_an_ask_with_no_tools_as_a_failure(http, tmp_path):
+    log = QueryLog(tmp_path)
+    api = gateway.create_app(gateway.Catalog([], http), DownLLM(), http, query_log=log)
+    assert api.test_client().post("/api/ask", json={"question": "sacks?"}).status_code == 503
+    (record,) = list(feedback.read(log.path))
+    assert record["failed"] and record["error"] == "no tool service is available"

@@ -79,13 +79,16 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml $svc.resources | nindent 12 }}
-          {{- if $svc.data }}
+          {{- if or $svc.data $svc.feedback }}
           volumeMounts:
+            {{- if $svc.data }}
             - name: data
               mountPath: /data
               readOnly: true
+            {{- end }}
             {{- if $svc.feedback }}
-            # The miss log (fourthdown.feedback): the one writable path, made by the pipeline.
+            # The miss and query logs (fourthdown.feedback): the one writable path, made by
+            # the pipeline.
             - name: data
               mountPath: /data/feedback
               subPath: feedback

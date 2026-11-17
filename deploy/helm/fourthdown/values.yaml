@@ -54,13 +54,14 @@ llm:
 threads: 4
 
 # One entry per application service. `data` mounts the data volume read-only; `feedback`
-# also mounts its feedback/ directory writable, for the miss log. Services
+# mounts the volume's feedback/ directory writable, for the miss and query logs. Services
 # start before their dependencies and heal as they appear (fourthdown.services.common).
 services:
   gateway:
     port: 8000
     replicas: 1
     data: false
+    feedback: true
     service: {type: ClusterIP, nodePort: null}
     resources:
       requests: {cpu: 50m, memory: 128Mi}

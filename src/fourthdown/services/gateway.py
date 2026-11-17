@@ -37,6 +37,8 @@ from flask import Flask, Response, after_this_request, jsonify, request
 from fourthdown.agent.assistant import Assistant, answer_json
 from fourthdown.agent.router import HybridRouter
 from fourthdown.agent.tools import Evidence, ToolError, evidence_from_json
+from fourthdown.config import data_paths
+from fourthdown.feedback import QueryLog, query_entry
 from fourthdown.llm import LLMClient, default_client
 from fourthdown.services.common import (
     MAX_QUESTION_CHARS,
@@ -233,6 +235,7 @@ def create_app(
     client: LLMClient,
     http: HTTP = requests,
     guests: GuestLimiter | None = None,
+    query_log: QueryLog | None = None,
 ) -> Flask:
     """The gateway app.
 
@@ -241,6 +244,8 @@ def create_app(
         client: The routing LLM (the router falls back to keywords if it fails).
         http: Transport for the proxied endpoints (the `requests` module in production).
         guests: Limits for the guest login; ``None`` limits nobody.
+        query_log: Where every ``/api/ask`` is recorded (`fourthdown.feedback`); nowhere
+            when ``None``.
 
     Returns:
         The Flask app serving the endpoints listed in the module docstring. The dashboard
@@ -299,6 +304,18 @@ def create_app(
             return refused
         tools = catalog.tools()
         if not tools:
+            if query_log is not None:
+                query_log.record(
+                    query_entry(
+                        question=question,
+                        tool=None,
+                        decided_by=None,
+                        elapsed_seconds=0.0,
+                        failed=True,
+                        error="no tool service is available",
+                        guest=is_guest(),
+                    )
+                )
             return jsonify({"error": "no tool service is available", "tools": []}), 503
         tool = payload.get("tool")
         assistant = Assistant(tools, HybridRouter(tools, client))
@@ -308,6 +325,20 @@ def create_app(
             return jsonify(
                 {"error": f"unknown tool {tool!r}", "tools": list(assistant.tool_names)}
             ), 400
+        if query_log is not None:
+            query_log.record(
+                query_entry(
+                    question=question,
+                    tool=answer.tool,
+                    decided_by=answer.decided_by,
+                    elapsed_seconds=answer.elapsed_seconds,
+                    detail=answer.detail,
+                    rows=None if answer.table is None else answer.table.rows,
+                    failed=answer.failed,
+                    error=answer.answer if answer.failed else None,
+                    guest=is_guest(),
+                )
+            )
         return jsonify(answer_json(answer))
 
     @app.post("/api/advise")
@@ -344,7 +375,12 @@ def main(host: str | None = None, port: int | None = None, model: str | None = N
     urls = os.environ.get("FOURTHDOWN_SERVICES", DEFAULT_SERVICES).split(",")
     policy = GuestPolicy.from_env()
     guests = None if policy is None else GuestLimiter(policy)
-    app = create_app(Catalog(urls, requests), default_client(model), guests=guests)
+    app = create_app(
+        Catalog(urls, requests),
+        default_client(model),
+        guests=guests,
+        query_log=QueryLog(data_paths().feedback),
+    )
     serve(app, host=host, port=port, default_port=PORT)
 
 
