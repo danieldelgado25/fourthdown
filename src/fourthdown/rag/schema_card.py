@@ -169,11 +169,9 @@ EXTRA_CUES: dict[str, tuple[str, ...]] = {
     "pass_length": ("deep", "short pass", "bomb"),
     "pass_location": ("to the left", "to the right", "over the middle", "sideline"),
     "run_location": ("to the left", "to the right", "up the middle", "outside"),
-    "run_gap": ("gap", "guard", "off tackle", "edge"),
+    "run_gap": ("gap", "guard", "off tackle", "the edge"),
     "air_yards": ("depth of target", "adot", "downfield", "deep"),
     "yards_after_catch": ("after the catch", "after catch", "yac"),
-    "complete_pass": ("complet",),
-    "incomplete_pass": ("incomplet",),
     "interception": ("intercept", "pick"),
     "sack": ("sack",),
     "fumble_lost": ("fumbl",),
@@ -183,9 +181,9 @@ EXTRA_CUES: dict[str, tuple[str, ...]] = {
     "kicker_player_name": ("kicker", "field goal", "fg"),
     "punt_attempt": ("punt",),
     "punter_player_name": ("punt",),
-    "extra_point_attempt": ("extra point", "pat"),
+    "extra_point_attempt": ("extra point", "point after"),
     "two_point_attempt": ("two point", "2 point", "2pt", "two pt"),
-    "roof": ("dome", "indoor", "outdoor", "retractable"),
+    "roof": ("in a dome", "dome game", "domed", "indoor", "outdoor", "retractable"),
     "surface": ("turf", "grass"),
     "temp": ("temperature", "cold", "degrees"),
     "wind": ("windy", "wind"),
@@ -200,8 +198,9 @@ EXTRA_CUES: dict[str, tuple[str, ...]] = {
     "xyac_mean_yardage": ("expected yac", "expected yards after", "xyac"),
 }
 
-# Deliberately cue-less: touchdowns and conversions have box-score columns in player_game
-# and team_game, and listing the plays flags beside them pulled the model off those views.
+# Deliberately cue-less: touchdowns, conversions, and completions have box-score columns
+# in player_game and team_game, and listing the plays flags beside them pulled the model
+# off those views (sum(complete_pass) on player_game for "passes Burrow completed").
 
 # What a name does not say about a left-out column. Kept apart from COLUMN_NOTES, which
 # would print beside same-named columns of the other views and cost card space.
