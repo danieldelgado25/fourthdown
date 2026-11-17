@@ -5,7 +5,7 @@ Tools:
     ``tendency`` -- neutral-script pass rate and EPA by team (no LLM).
 
 Endpoints, beyond `common.tool_service`'s ``/health`` and ``/tools/<name>``:
-    ``GET /tendencies?season=2024&team=KC`` -- the tendency table as structured JSON.
+    ``GET /tendencies?season=2025&team=KC`` -- the tendency table as structured JSON.
 
 Dependencies: the ``warehouse`` extra (duckdb, sqlglot). Reads ``FOURTHDOWN_DATA_DIR``,
 ``OLLAMA_HOST``, ``FOURTHDOWN_LLM_MODEL``. Default port 8001.
@@ -91,7 +91,7 @@ class StatsTool:
     name = "stats"
     description = (
         "Counts, rates, totals, leaders, player stat lines, and any question whose answer "
-        "is a number or a ranking computed over the play-by-play table (2009-2024). Also "
+        "is a number or a ranking computed over the play-by-play table (2009-2025). Also "
         "game facts: final scores, who played whom and in which week, venue, weather. Use "
         "for 'how many', 'which team led', 'what was the score', 'who did X play in week N'."
     )
@@ -123,7 +123,7 @@ class StatsTool:
             )
         rows = [list(row) for row in answer.rows[: self._max_rows]]
         empty = all(value is None for row in rows for value in row)
-        no_rows = "No rows matched. Check the spelling of names and that the filters fit 2009-2024."
+        no_rows = "No rows matched. Check the spelling of names and that the filters fit 2009-2025."
         if empty:
             headline = answer.note or no_rows
         else:
@@ -148,7 +148,7 @@ class TendencyTool:
     Args:
         connection: An open warehouse connection.
 
-    `run(question)` parses a season (default 2024) and an optional team out of the
+    `run(question)` parses a season (default 2025) and an optional team out of the
     question and returns the `tendencies` table, or a failed `Evidence` if it is empty.
     """
 
@@ -156,7 +156,7 @@ class TendencyTool:
     description = (
         "How pass-happy or run-heavy a team is, and how well it did doing that: "
         "neutral-script pass rate and EPA per play for a season, by team. Use for "
-        "'how often do the Ravens run', 'who is the most pass-heavy team in 2024'."
+        "'how often do the Ravens run', 'who is the most pass-heavy team in 2025'."
     )
 
     def __init__(self, connection: duckdb.DuckDBPyConnection) -> None:
@@ -229,7 +229,7 @@ def create_app(resources: Reloading[WarehouseCapabilities]) -> Flask:
 
     Returns:
         `common.tool_service` plus ``GET /tendencies``: query ``season`` (int, default
-        2024) and optional ``team``; replies ``{"season", "columns", "rows"}``, 400 on a
+        2025) and optional ``team``; replies ``{"season", "columns", "rows"}``, 400 on a
         non-integer season, 503 when the warehouse is not open.
     """
     app = tool_service(NAME, resources, errors=(duckdb.Error, LLMError))
@@ -240,7 +240,7 @@ def create_app(resources: Reloading[WarehouseCapabilities]) -> Flask:
         if connection is None:
             return jsonify({"error": "no warehouse; run `fourthdown build`"}), 503
         try:
-            season = int(request.args.get("season", 2024))
+            season = int(request.args.get("season", 2025))
         except ValueError:
             return jsonify({"error": "season must be an integer"}), 400
         table = tendencies(connection, season, request.args.get("team") or None)

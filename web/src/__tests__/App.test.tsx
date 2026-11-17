@@ -155,6 +155,6 @@ describe("App", () => {
 
     expect(await screen.findByText("DET")).toBeInTheDocument();
     expect(screen.getByText("61% pass")).toBeInTheDocument();
-    expect(String(fetchMock.mock.calls[1][0])).toContain("season=2024");
+    expect(String(fetchMock.mock.calls[1][0])).toContain("season=2025");
   });
 });

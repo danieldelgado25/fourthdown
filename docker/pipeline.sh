@@ -5,7 +5,7 @@
 set -eu
 
 data="${FOURTHDOWN_DATA_DIR:?FOURTHDOWN_DATA_DIR must be set}"
-seasons="${FOURTHDOWN_SEASONS:-2009-2024}"
+seasons="${FOURTHDOWN_SEASONS:-2009-2025}"
 train_args="${FOURTHDOWN_TRAIN_ARGS:-}"
 want="seasons=${seasons} train=${train_args}"
 stamp="${data}/.pipeline"

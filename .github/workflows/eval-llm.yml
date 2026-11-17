@@ -30,9 +30,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/raw
-          key: nflverse-pbp-2009-2024-v1
+          key: nflverse-pbp-2009-2025-v1
       - name: Build the warehouse
-        run: fourthdown build --seasons 2009-2024
+        run: fourthdown build --seasons 2009-2025
       - name: Restore Ollama models
         uses: actions/cache@v4
         with:
@@ -103,9 +103,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/raw
-          key: nflverse-pbp-2009-2024-v1
+          key: nflverse-pbp-2009-2025-v1
       - name: Build the warehouse
-        run: fourthdown build --seasons 2009-2024
+        run: fourthdown build --seasons 2009-2025
       - name: Pull the embedding model
         run: |
           curl -sf http://localhost:11434/api/pull -d '{"model": "nomic-embed-text", "stream": false}'

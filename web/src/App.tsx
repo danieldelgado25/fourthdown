@@ -29,7 +29,7 @@ export function App() {
       <header className="top">
         <h1>FourthDown</h1>
         <p className="muted">
-          NFL play-by-play 2009-2024 · guarded SQL, hybrid retrieval, and win-probability models
+          NFL play-by-play 2009-2025 · guarded SQL, hybrid retrieval, and win-probability models
         </p>
         {error && <p className="error">API unreachable: {error}</p>}
         {health && <HealthBar health={health} />}

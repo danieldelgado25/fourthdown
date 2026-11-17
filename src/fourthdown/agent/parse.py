@@ -16,7 +16,7 @@ from fourthdown.narrative.teams import TEAM_NAMES
 if TYPE_CHECKING:
     from fourthdown.models.winprob import GameState
 
-DEFAULT_SEASON = 2024
+DEFAULT_SEASON = 2025
 DEFAULT_MINUTES = 15.0
 
 WORD_NUMBERS: dict[str, float] = {
