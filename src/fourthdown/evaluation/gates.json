@@ -5,7 +5,7 @@
   "routing_keyword.accuracy": {"min": 0.9, "why": "the keyword router is the fallback when Ollama is down; measured 19/20"},
   "routing_keyword.worst_tool_recall": {"min": 0.8, "why": "a router that collapses one tool onto another looks fine on accuracy alone"},
   "references.runnable": {"min": 1.0, "why": "every golden reference query must pass the guard and execute; a schema change breaks them first"},
-  "grounding.grounded": {"min": 1.0, "why": "every number a stats answer states must be in its SQL result (or the question); measured 40/40 on the golden references, and one invented number is a hallucination"},
+  "grounding.grounded": {"min": 1.0, "why": "every number a stats answer states must be in its SQL result (or the question); measured 62/62 on the golden references, and one invented number is a hallucination"},
   "models.wp_auc": {"min": 0.83, "max": 0.95, "why": "measured 0.863 on 2021-2024; above 0.95 on held-out seasons means a leaked feature"},
   "models.wp_log_loss": {"max": 0.48, "why": "measured 0.455; the full-split model matches nflfastR's vegas_wp"},
   "models.wp_ece": {"max": 0.02, "why": "the fourth-down advisor compares probabilities directly, so they must be calibrated"},
