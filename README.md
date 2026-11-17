@@ -160,6 +160,8 @@ mistaken for tendency. Full numbers in [docs/model_eval.md](docs/model_eval.md).
 ```bash
 fourthdown lineage --verify      # rehash data/ against data/manifest.json -> docs/lineage.md
 fourthdown train                 # refuses drifted data; logs the run to MLflow
+fourthdown registry list         # every registered version and its gate verdict
+fourthdown registry promote 3    # serve (or roll back to) a version that passed
 make mlflow-ui                   # browse runs at http://127.0.0.1:5000
 make wp-image && make wp-run     # the win-probability model on http://127.0.0.1:8080
 ```
@@ -185,6 +187,19 @@ curl -s localhost:8080/v1/win-probability -H 'content-type: application/json' -d
 `{"states": [...]}` scores up to 1,000 situations at once. `GET /v1/model` returns the
 card (features, split, held-out metrics), and `GET /health` is the container healthcheck.
 Lineage tables are in [docs/lineage.md](docs/lineage.md).
+
+### The model registry
+
+`fourthdown train` no longer writes into `data/models`, the directory the services and the
+model container serve from. It trains into a candidate directory, registers the run as a
+new version of `fourthdown-win-probability` in MLflow, and tags it with the verdict of the
+`models.*` scorecard gates (the bounds in `gates.json` that CI enforces). Only a version
+that passed is promoted: the `champion` alias moves to it, and its artifacts are exported
+from MLflow into `data/models` with the version on the card, so every prediction can name
+the registered version it came from. A run that fails a gate is registered, reported, and
+not served; the previous champion keeps serving. `--promote never` registers without
+serving, and `--promote always` is for smoke runs (CI, the quick cluster) whose model is
+installed but never made champion. Rolling back is `fourthdown registry promote <version>`.
 
 ## The assistant, the API, and the dashboard
 
@@ -373,11 +388,13 @@ make kind-down
 
 ```bash
 make k8s-deploy HELM_ARGS="--set pipeline.seasons=2022-2024 \
-  --set pipeline.trainArgs='--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024' \
+  --set pipeline.trainArgs='--train-seasons 2022 --valid-seasons 2023 --test-seasons 2024 --promote always' \
   --set llm.model=qwen2.5-coder:1.5b"
 ```
 
 The training split must fall inside `pipeline.seasons`; the default trains on 2009-2018.
+Three seasons train a model the gates would reject, so the quick cluster serves it with
+`--promote always` (see [the registry](#the-model-registry)).
 Postgres and Ollama
 can be external (`postgres.enabled=false` with `postgres.externalDsn`,
 `ollama.enabled=false` with `ollama.externalUrl`), and `llm.baseUrl` / `llm.apiKey` point

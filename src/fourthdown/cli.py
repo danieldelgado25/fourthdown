@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+import shutil
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -16,11 +17,11 @@ from fourthdown import feedback
 from fourthdown.agent.assistant import Assistant
 from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter
 from fourthdown.agent.tools import Tool
-from fourthdown.config import data_paths
+from fourthdown.config import Paths, data_paths
 from fourthdown.data import audit, etl, ingest, provenance, warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness, scorecard, suites
 from fourthdown.llm import LLMError, default_client
-from fourthdown.models import fourth_down, tracking, winprob
+from fourthdown.models import fourth_down, registry, tracking, winprob
 from fourthdown.models import train as training
 from fourthdown.models.card import MODEL_CARD, ModelCard
 from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
@@ -480,6 +481,36 @@ def lineage_cmd(
     typer.echo(f"data version {manifest.data_version}; lineage written to {output}")
 
 
+PROMOTE_MODES = ("gated", "never", "always")
+CANDIDATE_DIR = ".candidate"
+"""Where `train` writes before anything is served; under the models dir, so on one volume."""
+
+
+def _serve_candidate(
+    card: ModelCard, paths: Paths, candidate: Path, *, promote: str, track: bool
+) -> None:
+    """Register the trained candidate, and install it for serving if ``promote`` allows."""
+    failures = registry.gate_failures(card.metrics)
+    for failure in failures:
+        typer.echo(f"GATE {failure}", err=True)
+    serve = promote == "always" or (promote == "gated" and not failures)
+    if track:
+        version = registry.register(card, paths)
+        typer.echo(f"registered {registry.MODEL_NAME} version {version.version} ({version.gates})")
+        if serve:
+            registry.promote(paths, version.version, ungated=bool(failures))
+            role = "serving it, not as champion" if failures else f"now {registry.ALIAS}"
+            typer.echo(f"installed version {version.version}; {role}")
+    elif serve:
+        registry.install_unregistered(candidate, paths.models)
+        typer.echo(f"installed the untracked candidate into {paths.models}")
+    if not serve and promote != "never":
+        typer.echo(
+            f"not promoted: the models gates failed; still serving what is in {paths.models}",
+            err=True,
+        )
+
+
 @app.command("train")
 def train_cmd(
     output: Output = Path("docs/model_eval.md"),
@@ -498,10 +529,24 @@ def train_cmd(
         typer.Option(help="Fail (exit 1) if held-out win-probability log loss exceeds this."),
     ] = None,
     min_play_call_accuracy: Threshold = None,
+    promote: Annotated[
+        str,
+        typer.Option(
+            help="Serve the new models: 'gated' (only if the models gates pass), 'never', or "
+            "'always' (CI smoke runs, whose image is built from whatever trained)."
+        ),
+    ] = "gated",
     data_dir: DataDir = None,
     verbose: Verbose = False,
 ) -> None:
-    """Fit win probability, the fourth-down components, and the play-call model."""
+    """Fit win probability, the fourth-down components, and the play-call model.
+
+    The models are trained into a candidate directory. With tracking on, the run becomes a
+    new registered version (`fourthdown.models.registry`) and is promoted into the served
+    directory per ``--promote``; with ``--no-track`` the candidate is copied in directly.
+    """
+    if promote not in PROMOTE_MODES:
+        raise typer.BadParameter(f"--promote must be one of {', '.join(PROMOTE_MODES)}")
     _configure_logging(verbose)
     split = _split(train_seasons, valid_seasons, test_seasons)
     paths = data_paths(data_dir)
@@ -512,11 +557,13 @@ def train_cmd(
         typer.echo("data does not match data/manifest.json; rerun `fourthdown build`", err=True)
         raise typer.Exit(code=1)
     manifest = provenance.load(paths)
-    paths.models.mkdir(parents=True, exist_ok=True)
+    candidate = paths.models / CANDIDATE_DIR
+    shutil.rmtree(candidate, ignore_errors=True)
+    candidate.mkdir(parents=True)
     with warehouse.connect(paths) as connection:
         results = training.run(
             connection,
-            model_dir=paths.models,
+            model_dir=candidate,
             max_epochs=epochs,
             audit_sample=audit_sample,
             split=split,
@@ -524,7 +571,7 @@ def train_cmd(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(training.report(results))
     card = ModelCard.build(
-        artifact=paths.models / WP_ARTIFACT,
+        artifact=candidate / WP_ARTIFACT,
         manifest=manifest,
         params=tracking.training_params(
             SeasonSplit(
@@ -537,7 +584,7 @@ def train_cmd(
         ),
         metrics=training.summary_metrics(results),
     )
-    card_path = paths.models / MODEL_CARD
+    card_path = candidate / MODEL_CARD
     if track:
         card = tracking.log_run(
             card,
@@ -546,7 +593,7 @@ def train_cmd(
             manifest=manifest,
             history=results.history,
             artifacts=[
-                paths.models / name
+                candidate / name
                 for name in (
                     WP_ARTIFACT,
                     training.HISTORY_ARTIFACT,
@@ -559,7 +606,9 @@ def train_cmd(
         typer.echo(f"MLflow run {card.mlflow_run_id} at {card.mlflow_tracking_uri}")
     else:
         card.save(card_path)
-    typer.echo(f"data version {card.data_version}; model card at {card_path}")
+    _serve_candidate(card, paths, candidate, promote=promote, track=track)
+    shutil.rmtree(candidate, ignore_errors=True)
+    typer.echo(f"data version {card.data_version}; model card at {paths.models / MODEL_CARD}")
     typer.echo(
         f"win probability log loss {results.win_probability.log_loss:.4f} "
         f"(ECE {results.win_probability.calibration_error:.4f}), "
@@ -817,6 +866,51 @@ def queries_cmd(
         typer.echo(f"no queries recorded in {path}")
         return
     typer.echo(feedback.summarise(records, slowest=slowest).render())
+
+
+registry_app = typer.Typer(help="Registered win-probability versions and which one serves.")
+app.add_typer(registry_app, name="registry")
+
+
+@registry_app.command("list")
+def registry_list_cmd(data_dir: DataDir = None) -> None:
+    """Every registered version, newest first, with its gate verdict and headline metrics."""
+    paths = data_paths(data_dir)
+    found = registry.versions(paths)
+    if not found:
+        typer.echo(f"no {registry.MODEL_NAME} versions in {tracking.tracking_uri(paths)}")
+        return
+    for version in found:
+        marker = f" [{registry.ALIAS}]" if version.champion else ""
+        metrics = ", ".join(
+            f"{key} {version.metrics[key]:.4f}"
+            for key in ("wp_log_loss", "wp_auc", "advisor_agreement")
+            if key in version.metrics
+        )
+        typer.echo(
+            f"v{version.version}{marker}  gates {version.gates}  data {version.data_version}  "
+            f"{metrics}"
+        )
+        if version.failures:
+            typer.echo(f"    {version.failures}")
+
+
+@registry_app.command("promote")
+def registry_promote_cmd(
+    version: Annotated[int, typer.Argument(help="The registered version to serve.")],
+    data_dir: DataDir = None,
+) -> None:
+    """Serve a registered version that passed its gates (e.g. to roll back)."""
+    paths = data_paths(data_dir)
+    try:
+        card = registry.promote(paths, version)
+    except registry.RegistryError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(
+        f"version {version} is {registry.ALIAS}; installed into {paths.models} "
+        f"(data {card.data_version}, run {card.mlflow_run_id})"
+    )
 
 
 @app.command()

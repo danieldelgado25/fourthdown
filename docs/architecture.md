@@ -406,6 +406,18 @@ reads from the metadata service. No credential is stored on the machine, and the
 `deploy/azure/setup.sh` grants is scoped to that one VM. A failed call (no identity yet,
 or off Azure) is logged and retried after another idle window, never every minute.
 
+**Only gated models are served.** Training used to write straight into `data/models`, so
+the last run served whatever it produced. Now each run trains into a candidate directory,
+becomes a version of `fourthdown-win-probability` in the MLflow registry
+(`models/registry.py`), and is tagged with the verdict of the same `models.*` gates the
+scorecard applies; a missing gated metric counts as a failure. Promotion refuses a failed
+version. A passing one gets the `champion` alias and its artifacts are exported from
+MLflow into `data/models`: downloaded beside the directory, the weights rehashed against
+the card, then swapped in file by file with the card last. The serving side is unchanged
+and still has no MLflow; the card it loads now carries `registered_version`, and the model
+container returns it with every prediction. Smoke runs (CI, the three-season cluster)
+pass `--promote always`, which installs the model but never moves the alias.
+
 ## Containers and Kubernetes (phase 07b)
 
 One Dockerfile with a target per service (`make images`), plus the model image. None of

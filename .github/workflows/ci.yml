@@ -94,7 +94,9 @@ jobs:
       - name: Verify the data against its provenance manifest
         run: fourthdown lineage --verify --output eval/lineage.md
       - name: Train a short run, tracked in MLflow, to package
-        run: fourthdown train --epochs 5 --audit-sample 200 --output eval/model_eval.md
+        # A smoke run: install whatever trains so the image can be built; it is registered,
+        # but a 5-epoch model is never made champion (fourthdown.models.registry).
+        run: fourthdown train --epochs 5 --audit-sample 200 --promote always --output eval/model_eval.md
       - name: Build the win-probability image
         run: make wp-image
       - name: Smoke-test the container

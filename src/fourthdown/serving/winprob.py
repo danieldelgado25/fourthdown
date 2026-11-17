@@ -46,6 +46,7 @@ class LoadedModel:
         return {
             "data_version": self.card.data_version,
             "mlflow_run_id": self.card.mlflow_run_id,
+            "registered_version": self.card.registered_version,
             "artifact_sha256": self.card.artifact_sha256,
             "git_commit": self.card.git_commit,
         }
