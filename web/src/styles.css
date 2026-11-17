@@ -1,126 +1,158 @@
+/* ── Design tokens ───────────────────────────────────────────────────────────────────
+   One accent (field green), a neutral gray ramp, an 8px spacing scale. Contrast on
+   --color-bg: text 16.4:1, muted 8.6:1, subtle 5.6:1, accent 10.1:1; the lowest pairing
+   anywhere, subtle text on a card, is 5.2:1. All pass WCAG AA. */
 :root {
-  --bg: #0f1115;
-  --panel: #171b22;
-  --line: #262c36;
-  --text: #e7ebf0;
-  --muted: #8d97a6;
-  --accent: #4ade80;
-  --warn: #f87171;
+  /* Surfaces, darkest to lightest */
+  --color-bg: #0b0d12;
+  --color-surface: #12161d;
+  --color-surface-2: #181d26;
+  --color-surface-3: #202632;
+  --color-border: #242b37;
+  --color-border-strong: #343d4c;
+
+  /* Text */
+  --color-text: #e8ecf2;
+  --color-text-muted: #a3adbb;
+  --color-text-subtle: #7f8a9a;
+
+  /* The one accent, and what sits on it */
+  --color-accent: #34d399;
+  --color-accent-strong: #10b981;
+  --color-accent-soft: rgb(52 211 153 / 0.14);
+  --color-on-accent: #03140d;
+
+  /* Status */
+  --color-danger: #f87171;
+  --color-danger-soft: rgb(248 113 113 / 0.12);
+
+  /* Spacing: an 8px scale, with a 4px half step for tight gaps */
+  --space-half: 4px;
+  --space-1: 8px;
+  --space-2: 16px;
+  --space-3: 24px;
+  --space-4: 32px;
+  --space-5: 40px;
+  --space-6: 48px;
+  --space-8: 64px;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* Type */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+
+  /* Motion and focus */
+  --ease: 150ms cubic-bezier(0.2, 0, 0, 1);
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
+
   color-scheme: dark;
 }
 
+/* ── Base ──────────────────────────────────────────────────────────────────────────── */
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: var(--text-base) / 1.55 var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-main {
-  max-width: 940px;
-  margin: 0 auto;
-  padding: 32px 20px 64px;
+::selection {
+  background: var(--color-accent-soft);
 }
 
-h1 {
-  margin: 0;
-  font-size: 28px;
-  letter-spacing: -0.02em;
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--color-text-muted);
 }
 
 .error {
-  color: var(--warn);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+  border: 1px solid rgb(248 113 113 / 0.3);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
 }
 
-.top {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 16px;
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }
 
-.health {
-  display: flex;
-  gap: 8px;
-  list-style: none;
-  padding: 0;
-  margin: 12px 0 0;
-  font-size: 12px;
-}
-
-.health li {
-  padding: 2px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-}
-
-.health .up {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.health .down {
-  color: var(--muted);
-}
-
-nav {
-  display: flex;
-  gap: 4px;
-  margin: 20px 0;
-}
-
-.tab {
-  background: none;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  padding: 8px 16px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.tab.active {
-  color: var(--text);
-  background: var(--panel);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
-}
-
+/* ── Shared controls ───────────────────────────────────────────────────────────────── */
 form label {
   display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
 }
 
 textarea,
 input,
 select {
   width: 100%;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   padding: 10px 12px;
+  font: inherit;
+  transition: border-color var(--ease), background-color var(--ease);
+}
+
+textarea:hover,
+input:hover,
+select:hover {
+  border-color: var(--color-border-strong);
+}
+
+textarea:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  border-color: var(--color-accent);
+}
+
+button {
   font: inherit;
 }
 
-button[type="submit"],
-.chip {
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 9px 16px;
+button[type="submit"] {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: 10px var(--space-3);
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color var(--ease), border-color var(--ease);
 }
 
-button[type="submit"] {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+button[type="submit"]:hover:not([disabled]) {
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
 }
 
 button[disabled] {
@@ -128,145 +160,460 @@ button[disabled] {
   cursor: not-allowed;
 }
 
-.row {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.row select {
-  max-width: 220px;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  align-items: end;
-}
-
-.examples {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 14px 0;
-}
-
-.chip {
-  font-size: 12px;
-  color: var(--muted);
-  padding: 5px 10px;
-}
-
+/* A card: answers and results */
 .answer {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 16px;
-  margin-top: 18px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 .answer.failed {
-  border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
+  border-color: rgb(248 113 113 / 0.45);
 }
 
 .answer header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-1) 12px;
   flex-wrap: wrap;
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .badge {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  color: var(--accent);
-  border-radius: 999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  border-radius: var(--radius-pill);
   padding: 3px 10px;
   font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* ── App: page frame, header, service status, tabs ───────────────────────────────── */
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-3) var(--space-8);
+}
+
+.top {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+h1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* A yard-line mark beside the name. */
+h1::before {
+  content: "";
+  width: 6px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+}
+
+.top > p.muted {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+}
+
+.health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-xs);
+}
+
+.health li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-subtle);
+}
+
+.health li::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-subtle);
+}
+
+.health .up {
+  color: var(--color-text);
+}
+
+.health .up::before {
+  background: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* Tabs as one segmented control */
+nav {
+  display: flex;
+  gap: var(--space-half);
+  width: fit-content;
+  max-width: 100%;
+  margin: var(--space-3) 0;
+  padding: var(--space-half);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.tab {
+  flex: 0 0 auto;
+  background: none;
+  border: 0;
+  color: var(--color-text-muted);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--ease), background-color var(--ease);
+}
+
+.tab:hover {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+}
+
+.tab.active {
+  color: var(--color-text);
+  background: var(--color-surface-3);
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+
+.tab.active:focus-visible {
+  box-shadow: inset 0 -2px 0 var(--color-accent), var(--focus-ring);
+}
+
+@media (max-width: 600px) {
+  main {
+    padding: var(--space-3) var(--space-2) var(--space-6);
+  }
+
+  h1 {
+    font-size: var(--text-xl);
+  }
+
+  nav {
+    width: 100%;
+  }
+
+  .tab {
+    flex: 1 0 auto;
+  }
+}
+
+/* ── AskPanel: question form, examples, answer ───────────────────────────────────── */
+section > form:not(.grid) {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 88px;
+  line-height: 1.5;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-top: 12px;
+}
+
+.row select {
+  flex: 1 1 200px;
+  max-width: 260px;
+}
+
+.row button[type="submit"] {
+  margin-left: auto;
+}
+
+.examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: var(--space-2) 0;
+}
+
+.chip {
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 6px 12px;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--ease), border-color var(--ease), background-color var(--ease);
+}
+
+.chip:hover {
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
 }
 
 .prose {
   white-space: pre-wrap;
+  margin: var(--space-2) 0;
+  font-size: var(--text-lg);
+  line-height: 1.5;
 }
 
+.passages {
+  padding-left: 20px;
+  margin: var(--space-2) 0 0;
+}
+
+.passages li + li {
+  margin-top: 12px;
+}
+
+.passages p {
+  color: var(--color-text-muted);
+  margin: var(--space-half) 0 0;
+  font-size: var(--text-sm);
+}
+
+details {
+  margin-top: var(--space-2);
+}
+
+summary {
+  width: fit-content;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+summary:hover {
+  color: var(--color-text);
+}
+
+pre {
+  margin: var(--space-1) 0 0;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  overflow-x: auto;
+  font: var(--text-sm) / 1.6 var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 600px) {
+  section > form:not(.grid) {
+    padding: var(--space-2);
+  }
+
+  .row select,
+  .row button[type="submit"] {
+    flex: 1 1 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+}
+
+/* ── ResultTable ───────────────────────────────────────────────────────────────────── */
 .scroll {
   overflow-x: auto;
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
 }
 
 table {
   border-collapse: collapse;
   width: 100%;
-  font-size: 14px;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 th,
 td {
-  border-bottom: 1px solid var(--line);
   text-align: left;
-  padding: 7px 10px;
+  padding: 10px 14px;
   white-space: nowrap;
 }
 
 th {
-  color: var(--muted);
-  font-weight: 500;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--color-border);
 }
 
-.passages {
-  padding-left: 18px;
+tbody tr + tr td {
+  border-top: 1px solid var(--color-border);
 }
 
-.passages p {
-  color: var(--muted);
-  margin: 4px 0 12px;
+tbody tr {
+  transition: background-color var(--ease);
 }
 
-pre {
-  background: #0b0d11;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  overflow-x: auto;
-  font-size: 13px;
+tbody tr:hover {
+  background: var(--color-surface-2);
+}
+
+/* ── AdvisorPanel: the situation form and the ranked options ─────────────────────── */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+  align-items: end;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-3);
+}
+
+.grid label {
+  margin-bottom: 0;
+}
+
+.grid input {
+  margin-top: var(--space-1);
+  font-variant-numeric: tabular-nums;
 }
 
 .options {
   list-style: none;
   padding: 0;
-  margin: 14px 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 .options li {
   display: grid;
-  grid-template-columns: 110px 1fr 70px;
+  grid-template-columns: 120px 1fr 72px;
   align-items: center;
-  gap: 10px;
-  padding: 6px 0;
+  gap: var(--space-half) 12px;
+  padding: 12px 0;
+}
+
+.options li + li {
+  border-top: 1px solid var(--color-border);
 }
 
 .option-name {
   font-weight: 600;
 }
 
+/* The bar's width is the win probability. The best option (listed first) gets the accent. */
 .bar {
   display: block;
   height: 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 65%, transparent);
   min-width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+}
+
+.options li:first-child .bar {
+  background: var(--color-accent);
 }
 
 .value {
   text-align: right;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
 .detail {
   grid-column: 1 / -1;
-  font-size: 12px;
+  font-size: var(--text-xs);
+}
+
+@media (max-width: 600px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: var(--space-2);
+  }
+
+  .grid button[type="submit"] {
+    grid-column: 1 / -1;
+  }
+
+  .options li {
+    grid-template-columns: 88px 1fr 60px;
+  }
+}
+
+/* ── TendencyPanel: season picker and the league's pass rates ────────────────────── */
+section > label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+section > label select {
+  width: auto;
+  min-width: 110px;
+}
+
+.tendencies {
+  margin-top: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-1) var(--space-3);
 }
 
 .tendencies li {
-  grid-template-columns: 70px 1fr 90px;
+  grid-template-columns: 64px 1fr 96px;
+  padding: 10px 0;
+}
+
+/* Every team is measured the same way, so no bar is singled out. */
+.tendencies li .bar,
+.tendencies li:first-child .bar {
+  background: var(--color-accent);
+  opacity: 0.7;
+  transition: opacity var(--ease);
+}
+
+.tendencies li:hover .bar {
+  opacity: 1;
+}
+
+@media (max-width: 600px) {
+  .tendencies {
+    padding: var(--space-half) var(--space-2);
+  }
+
+  .tendencies li {
+    grid-template-columns: 52px 1fr 80px;
+  }
 }
