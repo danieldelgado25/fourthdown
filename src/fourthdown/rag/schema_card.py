@@ -11,6 +11,8 @@ prompt length is the budget, and an unused column is a hallucination waiting to 
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import duckdb
@@ -146,6 +148,117 @@ PLAYS_HIGHLIGHT: tuple[str, ...] = (
     "posteam_won",
 )
 
+# The other `plays` columns cost no card space: a question that needs one gets it listed
+# after the card (`relevant`). A column is needed when the question names it, with
+# underscores read as spaces ("air yards"), or says one of these cues. Cues match at the
+# start of a word, so "penalt" finds "penalty" and "penalties".
+EXTRA_CUES: dict[str, tuple[str, ...]] = {
+    "goal_to_go": ("goal to go", "goal line"),
+    "posteam_timeouts_remaining": ("timeout",),
+    "defteam_timeouts_remaining": ("timeout",),
+    "posteam_is_home": ("at home", "on the road", "road game", "away game"),
+    "game_half": ("first half", "second half", "overtime"),
+    "pass_play": ("dropback",),
+    "qb_dropback": ("dropback", "drop back"),
+    "qb_scramble": ("scrambl",),
+    "qb_kneel": ("kneel",),
+    "qb_spike": ("spike",),
+    "aborted_play": ("aborted", "botched snap", "fumbled snap"),
+    "special_teams": ("special teams",),
+    "penalty": ("penalt", "flag"),
+    "pass_length": ("deep", "short pass", "bomb"),
+    "pass_location": ("to the left", "to the right", "over the middle", "sideline"),
+    "run_location": ("to the left", "to the right", "up the middle", "outside"),
+    "run_gap": ("gap", "guard", "off tackle", "edge"),
+    "air_yards": ("depth of target", "adot", "downfield", "deep"),
+    "yards_after_catch": ("after the catch", "after catch", "yac"),
+    "complete_pass": ("complet",),
+    "incomplete_pass": ("incomplet",),
+    "interception": ("intercept", "pick"),
+    "sack": ("sack",),
+    "fumble_lost": ("fumbl",),
+    "pass_touchdown": ("touchdown pass", "passing touchdown", "td pass", "passing td"),
+    "rush_touchdown": ("rushing touchdown", "rushing td", "rush td"),
+    "third_down_converted": ("third down conversion", "converted on third", "convert"),
+    "fourth_down_converted": ("fourth down conversion", "convert"),
+    "fourth_down_failed": ("fourth down conversion", "convert", "turnover on downs"),
+    "field_goal_attempt": ("field goal", "fg", "kicker"),
+    "field_goal_result": ("field goal", "fg", "kicker"),
+    "kick_distance": ("field goal", "fg", "kicker", "punt", "longest kick", "yard kick"),
+    "kicker_player_name": ("kicker", "field goal", "fg"),
+    "punt_attempt": ("punt",),
+    "punter_player_name": ("punt",),
+    "extra_point_attempt": ("extra point", "pat"),
+    "two_point_attempt": ("two point", "2 point", "2pt", "two pt"),
+    "roof": ("dome", "indoor", "outdoor", "retractable"),
+    "surface": ("turf", "grass"),
+    "temp": ("temperature", "cold", "degrees"),
+    "wind": ("windy", "wind"),
+    "qb_epa": ("quarterback epa", "qb epa"),
+    "wpa": ("win probability added",),
+    "vegas_wp": ("vegas",),
+    "cp": ("completion probability",),
+    "cpoe": ("completion percentage over expected", "cpoe"),
+    "xpass": ("expected pass", "over expected", "proe"),
+    "pass_oe": ("pass rate over expected", "over expected", "proe"),
+    "xyac_epa": ("expected yac", "expected yards after", "xyac"),
+    "xyac_mean_yardage": ("expected yac", "expected yards after", "xyac"),
+}
+
+# What a name does not say about a left-out column. Kept apart from COLUMN_NOTES, which
+# would print beside same-named columns of the other views and cost card space.
+EXTRA_NOTES: dict[str, str] = {
+    "game_half": "'Half1', 'Half2', or 'Overtime'",
+    "posteam_type": "'home' or 'away'",
+    "penalty": "a penalty was called on the play; play_type 'no_play' when it wiped the play out",
+    "pass_length": "'short' or 'deep'; NULL on runs",
+    "pass_location": "'left', 'middle', or 'right'; NULL on runs",
+    "run_location": "'left', 'middle', or 'right'; NULL on passes",
+    "run_gap": "'end', 'tackle', or 'guard'; NULL up the middle",
+    "air_yards": "yards the pass travelled past the line of scrimmage; NULL on runs",
+    "yards_after_catch": "completions only",
+    "field_goal_result": "'made', 'missed', or 'blocked'; NULL unless field_goal_attempt",
+    "kick_distance": "yards of a field goal, punt, or kickoff",
+    "kicker_player_name": "abbreviated, not unique: 'J.Tucker'",
+    "punter_player_name": "abbreviated, not unique: 'J.Hekker'",
+    "roof": "'outdoors', 'dome', 'closed', or 'open'",
+    "temp": "degrees Fahrenheit; NULL indoors",
+    "qb_epa": "EPA credited to the quarterback",
+    "wpa": "win probability added for posteam",
+    "cp": "completion probability of the pass, 0-1",
+    "xpass": "probability the play is a pass, before the snap, 0-1",
+    "pass_oe": "pass over expected, in percentage points; average it for a team's PROE",
+    "fixed_drive_result": "how the drive ended; the drives view has one row per drive",
+}
+
+# Columns no question should be pointed at: ids, bookkeeping, and per-game facts the
+# games view already lists.
+NEVER_SUGGESTED = frozenset(
+    {
+        "fixed_drive",
+        "series",
+        "series_result",
+        "drive_id",
+        "play_deleted",
+        "ep",
+        "result",
+        "total",
+        "home_score",
+        "away_score",
+        "spread_line",
+        "total_line",
+        "div_game",
+        "stadium",
+        "home_coach",
+        "away_coach",
+        "game_date",
+        "home_team",
+        "away_team",
+    }
+)
+
+MAX_EXTRA_COLUMNS = 12
+
 GLOSSARY = """\
 Football terms:
 - third and long: down = 3 AND distance_bucket IN ('long', 'very_long').
@@ -236,15 +349,65 @@ def _render_view(view: str, columns: list[Column], seen: set[tuple[str, str]]) -
     return "\n".join(lines)
 
 
-def view_columns(connection: duckdb.DuckDBPyConnection) -> dict[str, tuple[str, ...]]:
-    """Column names per view, for repair feedback. `plays` is trimmed to the card's subset."""
+def view_columns(
+    connection: duckdb.DuckDBPyConnection, *, full: bool = False
+) -> dict[str, tuple[str, ...]]:
+    """Column names per view, for repair feedback.
+
+    `plays` is trimmed to the card's subset unless ``full``: the trimmed lists are what a
+    repair prompt shows, the full ones say whether a column exists anywhere at all.
+    """
     columns: dict[str, tuple[str, ...]] = {}
     for view in VIEW_NAMES:
         names = [column.name for column in _columns(connection, view)]
-        if view == "plays":
+        if view == "plays" and not full:
             names = [name for name in PLAYS_HIGHLIGHT if name in set(names)]
         columns[view] = tuple(names)
     return columns
+
+
+def plays_extras(connection: duckdb.DuckDBPyConnection) -> tuple[Column, ...]:
+    """The `plays` columns the card leaves out, with the notes `relevant` lists them with."""
+    return tuple(
+        Column(column.name, column.type, EXTRA_NOTES.get(column.name, column.note))
+        for column in _columns(connection, "plays")
+        if column.name not in PLAYS_HIGHLIGHT and column.name not in NEVER_SUGGESTED
+    )
+
+
+def _words(text: str) -> str:
+    """Lowercase words separated by single spaces, padded so a cue can match at a word start."""
+    return " " + " ".join(re.findall(r"[a-z0-9]+", text.lower())) + " "
+
+
+def relevant(
+    question: str, extras: Sequence[Column], *, limit: int = MAX_EXTRA_COLUMNS
+) -> list[Column]:
+    """The left-out `plays` columns this question needs, in view order.
+
+    A column is needed when the question names it ("air yards") or one of its cues
+    ("penalties" for `penalty`). Cues match at the start of a word, so "intercept" finds
+    "interceptions".
+    """
+    text = _words(question)
+    chosen = []
+    for column in extras:
+        cues = (column.name.replace("_", " "), *EXTRA_CUES.get(column.name, ()))
+        if any(_words(cue).rstrip() in text for cue in cues):
+            chosen.append(column)
+    return chosen[:limit]
+
+
+def render_relevant(columns: Sequence[Column]) -> str:
+    """The block appended to the card for one question, or "" when it needs nothing extra."""
+    if not columns:
+        return ""
+    lines = ["More plays columns, for this question:"]
+    lines += [
+        f"  {column.name} {column.type}" + (f"  # {column.note}" if column.note else "")
+        for column in columns
+    ]
+    return "\n".join(lines)
 
 
 def build(connection: duckdb.DuckDBPyConnection) -> str:
@@ -258,7 +421,7 @@ def build(connection: duckdb.DuckDBPyConnection) -> str:
             columns = [highlighted[name] for name in PLAYS_HIGHLIGHT if name in highlighted]
             extra = len(highlighted) - len(columns)
             block = _render_view(view, columns, seen)
-            block += f"\n  ...and {extra} more raw nflverse columns (penalties, kicking, ids)"
+            block += f"\n  ...and {extra} more columns, listed below if a question needs them"
         else:
             block = _render_view(view, columns, seen)
         blocks.append(block)
