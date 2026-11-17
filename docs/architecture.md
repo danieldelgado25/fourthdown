@@ -322,6 +322,7 @@ enough to look fine.
 | guard: 36 adversarial queries, legitimate queries, row caps | nothing | every PR |
 | routing_keyword | nothing | every PR |
 | references: every golden reference query runs on the warehouse | warehouse | every PR |
+| grounding: every number in a stats answer is in its SQL result | warehouse | every PR |
 | models: retrain all three models from scratch and score them | warehouse | every PR |
 | text_to_sql, routing_llm | Ollama with `qwen2.5-coder:7b` | weekly, on demand, or with the `eval-llm` PR label |
 | retrieval | the full Postgres index and `nomic-embed-text` | weekly and on demand, beside the LLM suites |
@@ -335,6 +336,16 @@ Retrieval runs against the full index, every game and every postseason drive. In
 only the games the golden set asks about would make search much easier than against the
 real corpus and report an inflated hit@1, so the job embeds all ~8.5k narratives first,
 which is why it is weekly rather than per-PR.
+
+**Numbers are checked, not trusted.** "Nothing the LLM writes carries a number the tools
+did not compute" is a rule the grounding suite enforces. It takes the exact text a reader
+gets from the stats tool, extracts every number, and requires each one to be a cell of
+the result (at the precision printed, so `0.37` stands for `0.3679`), digits inside a
+text cell (`07` in a game id supports "week 7"), the row count, or a number from the
+question. Offline it replays every golden reference through the real formatting path, and
+the gate is 100%: one invented number is a hallucination, not a rounding error. The
+text_to_sql suite reports the same `grounded` metric over what the model wrote, including
+the empty-result review's notes.
 
 **The guard suite found real bypasses.** Before this phase the guard checked table names
 against the allowed views, but it had no rule for table functions. A query could read a

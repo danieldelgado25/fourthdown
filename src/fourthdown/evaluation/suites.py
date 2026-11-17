@@ -1,8 +1,9 @@
 """Every evaluation suite as a function that returns a ``SuiteResult``.
 
-The suites split by what they need. Four run on a GitHub runner with nothing but the
+The suites split by what they need. Five run on a GitHub runner with nothing but the
 warehouse: the adversarial SQL guard set, keyword routing, the golden reference queries,
-and a retrain of every model on a smaller season split. Three need a running model --
+grounding (every number a stats answer states comes from its result), and a retrain of
+every model on a smaller season split. Three need a running model --
 text-to-SQL and LLM routing need Ollama's chat model, retrieval needs Postgres plus the
 embedding model -- and are skipped with a reason when it is missing.
 """
@@ -23,16 +24,17 @@ import duckdb
 from fourthdown.agent.router import KeywordRouter, LLMRouter, Router
 from fourthdown.config import Paths
 from fourthdown.data import warehouse
-from fourthdown.evaluation import harness, retrieval_harness, routing_harness
+from fourthdown.evaluation import grounding, harness, retrieval_harness, routing_harness
 from fourthdown.evaluation.scorecard import SuiteResult
 from fourthdown.llm import ChatClient
 from fourthdown.models import train as training
 from fourthdown.models import winprob
 from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
-from fourthdown.rag.text_to_sql import TextToSQL
+from fourthdown.rag.text_to_sql import SQLAnswer, TextToSQL
 from fourthdown.retrieval import DocumentStore, Embedder
 from fourthdown.retrieval.embed import EmbeddingError
 from fourthdown.retrieval.store import StoreError
+from fourthdown.services.warehouse import StatsTool
 from fourthdown.sql import guard
 
 LOGGER = logging.getLogger(__name__)
@@ -42,12 +44,13 @@ GUARD_FILE = "golden_guard.json"
 GUARD = "guard"
 ROUTING_KEYWORD = "routing_keyword"
 REFERENCES = "references"
+GROUNDING = "grounding"
 MODELS = "models"
 TEXT_TO_SQL = "text_to_sql"
 ROUTING_LLM = "routing_llm"
 RETRIEVAL = "retrieval"
 
-OFFLINE: tuple[str, ...] = (GUARD, ROUTING_KEYWORD, REFERENCES, MODELS)
+OFFLINE: tuple[str, ...] = (GUARD, ROUTING_KEYWORD, REFERENCES, GROUNDING, MODELS)
 """Suites that need no model server, only (for some) a built warehouse."""
 
 ALL: tuple[str, ...] = (*OFFLINE, TEXT_TO_SQL, ROUTING_LLM, RETRIEVAL)
@@ -155,24 +158,94 @@ def references_suite(connection: duckdb.DuckDBPyConnection) -> SuiteResult:
     )
 
 
+class _Replay:
+    """An LLM client that writes whatever SQL it is told to: the golden reference."""
+
+    model = "reference"
+
+    def __init__(self) -> None:
+        self.sql = ""
+
+    def complete(self, *, system: str, prompt: str, temperature: float = 0.0) -> str:
+        return self.sql
+
+
+def _grounding_metrics(report: grounding.GroundingReport) -> dict[str, float]:
+    return {
+        "grounded": _fraction(report.grounded, report.checked),
+        "unsupported_numbers": float(report.numbers_unsupported),
+        "answers_checked": float(report.checked),
+    }
+
+
+def grounding_suite(connection: duckdb.DuckDBPyConnection) -> SuiteResult:
+    """The stats tool's reader-facing text, for every golden reference, against its rows.
+
+    The reference SQL stands in for the model, so this checks the formatting path (the
+    headline, the notes) offline. Model-written text is checked in the text_to_sql suite.
+    """
+    client = _Replay()
+    chain = TextToSQL(connection, client, review=False)
+    tool = StatsTool(chain)
+    questions = [
+        question
+        for question in (*harness.load_questions(), *harness.load_questions(holdout=True))
+        if question.reference_sql
+    ]
+    answers: list[grounding.Checked] = []
+    for question in questions:
+        assert question.reference_sql is not None
+        client.sql = question.reference_sql
+        answers.append(
+            _checked(question.id, question.question, tool, chain.answer(question.question))
+        )
+    report = grounding.check(answers)
+    return SuiteResult(
+        GROUNDING, metrics=_grounding_metrics(report), findings=tuple(report.findings())
+    )
+
+
+def _checked(id_: str, question: str, tool: StatsTool, answer: SQLAnswer) -> grounding.Checked:
+    evidence = tool.evidence(answer)
+    table = evidence.table
+    return (
+        id_,
+        question,
+        evidence.answer,
+        table.columns if table else (),
+        table.rows if table else [],
+    )
+
+
 def text_to_sql_suite(connection: duckdb.DuckDBPyConnection, client: ChatClient) -> SuiteResult:
     chain = TextToSQL(connection, client)
     report = harness.evaluate(connection, chain)
     holdout = harness.evaluate(connection, chain, harness.load_questions(holdout=True))
+    # The same grounding check as the offline suite, over what the model actually wrote,
+    # including the review's notes on empty results.
+    tool = StatsTool(chain)
+    grounded = grounding.check(
+        _checked(result.question.id, result.question.question, tool, result.answer)
+        for result in (*report.results, *holdout.results)
+    )
     return SuiteResult(
         TEXT_TO_SQL,
         metrics={
+            "grounded": _fraction(grounded.grounded, grounded.checked),
             "correct": _fraction(report.correct, report.total),
             "runnable": _fraction(report.executed, report.total),
             "repairs_per_question": _fraction(report.repairs, report.total),
             "holdout_correct": _fraction(holdout.correct, holdout.total),
             "holdout_runnable": _fraction(holdout.executed, holdout.total),
         },
-        findings=tuple(
-            f"`{result.question.id}`{' (holdout)' if split else ''}: {result.detail}"
-            for split, results in ((False, report.results), (True, holdout.results))
-            for result in results
-            if not result.correct
+        findings=(
+            *(
+                f"`{result.question.id}`{' (holdout)' if split else ''}: {result.detail}"
+                for split, results in ((False, report.results), (True, holdout.results))
+                for result in results
+                if not result.correct
+            ),
+            *grounded.findings(),
         ),
     )
 
@@ -248,6 +321,8 @@ def _with_warehouse(name: str, options: RunOptions) -> SuiteResult:
     with warehouse.connect(options.paths) as connection:
         if name == REFERENCES:
             return references_suite(connection)
+        if name == GROUNDING:
+            return grounding_suite(connection)
         if name == TEXT_TO_SQL:
             return text_to_sql_suite(connection, options.client)
         return models_suite(

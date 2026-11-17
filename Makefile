@@ -10,7 +10,7 @@ RELEASE ?= fourthdown
 CHART := deploy/helm/fourthdown
 HELM_ARGS ?=
 
-CI_SUITES ?= guard,routing_keyword,references,models
+CI_SUITES ?= guard,routing_keyword,references,grounding,models
 
 # Images built from the repo Dockerfile, one per target: fourthdown-<target>.
 SERVICES = gateway warehouse retrieval models
