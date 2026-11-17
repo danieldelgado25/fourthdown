@@ -213,11 +213,15 @@ yards after the catch, lost fumbles, a box-score team total, a Super Bowl winner
 | --- | --- | --- |
 | before | 39/68 | 9/15 |
 | box score + routing + per-question columns | 44/68 | 9/15 |
+| without touchdown and conversion cues | 46/68 | 9/15 |
 
 The gain is seven questions (the box-score leader, both sack questions, penalties,
-field-goal distance, two-point tries, overtime) against four losses. Two losses were the
-touchdown and conversion cues described above, removed after this run and rechecked by
-hand on those two questions; the other two are repair-loop spread.
+field-goal distance, two-point tries, overtime). The first run also lost four; two were
+the touchdown and conversion cues described above, and both pass once those cues are
+gone. Three losses remain against the baseline. Two are queries that group `drives` or
+`plays` by `team`, a column only the box-score views have, which the new box-score rule
+("GROUP BY team for a team") probably invites; one sums `total_points` over a season
+instead of taking the top game.
 
 ## Narrative retrieval (phase 03)
 
@@ -307,7 +311,10 @@ name from the catalog of tools that actually loaded; a keyword router sits under
 and answers whenever the model is unreachable, returns prose, or names a tool that does
 not exist. Both are measured against the same labelled question set
 ([routing_eval.md](routing_eval.md)), and they scored the same 19/20 — which is the point:
-the fallback is not a degraded mode, it is a cheap router the LLM has to beat.
+the fallback is not a degraded mode, it is a cheap router the LLM has to beat. On the
+29-question set, after facts about a Super Bowl moved to stats, the keyword router scores
+29/29 and the LLM and hybrid routers 28/29: the model sends "which team had the highest EPA
+per play" to the tendency tool.
 
 **Tools return evidence, not prose.** Every tool produces the same envelope — an answer
 line, an optional table, retrieved passages, and a detail map — so the API contract does

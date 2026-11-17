@@ -3,7 +3,7 @@
 - questions: 15
 - produced a runnable query: 15/15
 - correct result: 9/15
-- repair attempts used: 4
+- repair attempts used: 3
 
 | question | correct | detail |
 | --- | --- | --- |
