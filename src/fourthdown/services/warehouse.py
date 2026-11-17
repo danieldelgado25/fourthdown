@@ -92,8 +92,9 @@ class StatsTool:
     description = (
         "Counts, rates, totals, leaders, player stat lines, and any question whose answer "
         "is a number or a ranking computed over the play-by-play table (2009-2025). Also "
-        "game facts: final scores, who played whom and in which week, venue, weather. Use "
-        "for 'how many', 'which team led', 'what was the score', 'who did X play in week N'."
+        "game facts: final scores, who won (Super Bowls and playoff rounds included), who "
+        "played whom and in which week, records, venue, weather. Use for 'how many', 'which "
+        "team led', 'who won', 'what was the score', 'who did X play in week N'."
     )
 
     def __init__(self, chain: TextToSQL, *, max_rows: int = 50) -> None:

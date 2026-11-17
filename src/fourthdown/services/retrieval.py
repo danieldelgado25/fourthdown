@@ -60,8 +60,8 @@ class NarrativeTool:
     description = (
         "How a specific game, drive, or moment unfolded: comebacks, upsets, famous "
         "finishes, 'how did X lose to Y', 'tell me about the 2018 NFC championship'. "
-        "Answers from generated game summaries and cites them. Not for a bare final "
-        "score or who played whom; those are stats."
+        "Answers from generated game summaries and cites them. Not for a fact the data "
+        "holds, such as who won, a final score, or who played whom; those are stats."
     )
 
     def __init__(self, retriever: Retriever, client: LLMClient, *, k: int = 5) -> None:

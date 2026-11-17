@@ -50,15 +50,20 @@ ADVISOR_PATTERNS = (
 )
 NARRATIVE_PATTERNS = (
     r"\bwhat happened\b",
-    r"\bhow did\b.*\b(win|lose|beat|collapse|comeback)\b",
+    r"\bhow did\b.*\b(win|lose|beat|blow|collapse|comeback)\b",
     r"\btell me about\b",
     r"\bdescribe\b",
-    r"\bsuper bowl\b",
     r"\b(comeback|collapse|upset|meltdown)\b",
 )
-# Game facts the games view holds exactly; checked before the narrative cues, so "what was
-# the score of the Super Bowl" is a lookup rather than a search over summaries.
+# Facts the warehouse holds exactly; checked before the narrative cues, so "what was the
+# score of the Super Bowl" or "who won Super Bowl LX" is a query, not a search over game
+# summaries. Naming a Super Bowl is no narrative cue on its own: the summaries are for how
+# a game unfolded, and the warehouse is the source of record for everything it holds.
 STATS_PATTERNS = (
+    r"\b(who|which team|what team) won\b",
+    r"^(?!.*\b(how|why)\b).*\b(winners?|champions?)\b",
+    r"\bwho (led|had|threw|ran|rushed|caught|scored|kicked)\b",
+    r"\b(leaders?|led the league)\b",
     r"\b(final )?score (of|in|for)\b",
     r"\bwhat was the (final )?score\b",
     r"\bwho did\b.*\bplay\b",

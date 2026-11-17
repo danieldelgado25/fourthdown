@@ -10,12 +10,16 @@
   {"question": "How many catches did Chad Ochocinco have in 2010?", "tool": "stats"},
   {"question": "How many total points were scored in Super Bowl LIII?", "tool": "stats"},
   {"question": "How many passing yards did Patrick Mahomes have in the 2022 playoffs?", "tool": "stats"},
+  {"question": "Who won Super Bowl LX?", "tool": "stats"},
+  {"question": "Which team won the 2019 Super Bowl?", "tool": "stats"},
+  {"question": "Who won the 2018 AFC championship game?", "tool": "stats"},
 
   {"question": "What happened in the 2017 Super Bowl between the Patriots and the Falcons?", "tool": "narrative"},
   {"question": "Tell me about the Vikings' last drive in the 2017 divisional round", "tool": "narrative"},
   {"question": "How did the Colts blow their lead against the Vikings in 2022?", "tool": "narrative"},
   {"question": "Describe the wildest comeback of the 2022 season", "tool": "narrative"},
   {"question": "What happened at the end of the 2018 NFC championship game?", "tool": "narrative"},
+  {"question": "How did the Patriots come back to win Super Bowl LI?", "tool": "narrative"},
 
   {"question": "Should the Ravens go for it on 4th and 2 from the 38 down 3 with four minutes left?", "tool": "advisor"},
   {"question": "It is 4th and 1 at the 45 in a tie game with two minutes left, do I punt?", "tool": "advisor"},
