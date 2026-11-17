@@ -23,7 +23,7 @@ VIEW_PURPOSE: dict[str, str] = {
     "drives": "One row per drive with starting field position, result, and EPA.",
     "team_game": (
         "One row per team per game: pass rate, EPA splits, situational conversions. Rates "
-        "here are per game; compute a season rate from plays rather than averaging them."
+        "here are per game: a season rate comes from plays by posteam, never avg() of them."
     ),
     "player_game": (
         "One row per player per game per role ('passer', 'rusher', 'receiver'). Season "
@@ -162,7 +162,7 @@ Football terms:
 
 RULES = """\
 Rules:
-- DuckDB SQL, one SELECT statement, no semicolon, no DDL or DML.
+- DuckDB SQL: one SELECT, no semicolon, no DDL or DML.
 - Only these views exist. Do not invent tables, columns, or a `player_season` view.
 - Any question about tendency, play calling, or efficiency per play must filter
   `is_designed_play`, and should filter `is_neutral_script` when it asks what a team
@@ -180,8 +180,8 @@ Rules:
   'POST'; a named round also filters playoff_round.
 - A matchup: 'KC' IN (home_team, away_team) AND 'LA' IN (home_team, away_team).
 - Count plays with count(*) on plays; only the other views have a `plays` column.
-- team_game and player_game rates are per game. For a team's season rate, compute it
-  from plays grouped by posteam, never avg() of a per-game rate.
+- Yards, TDs, and catches (totals, leaders, a team's rushing or passing yards) are
+  box-score sums of player_game by role, GROUP BY team for a team; not plays.
 - Rates are averages of booleans cast to INT: `avg(is_pass_call::INT)`. Wrap a
   comparison in parentheses before casting: `avg((yards_gained >= 10)::INT)`.
 - Add ORDER BY and LIMIT when the question asks for the most, fewest, or a ranking.

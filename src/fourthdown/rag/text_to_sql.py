@@ -89,6 +89,12 @@ EXEMPLARS: tuple[tuple[str, str], ...] = (
         "AND player_name ILIKE 'S.%Diggs' GROUP BY player_id, player_name",
     ),
     (
+        "Which team had the most passing yards in 2018?",
+        "SELECT team, sum(yards) AS passing_yards FROM player_game WHERE season = 2018 "
+        "AND season_type = 'REG' AND role = 'passer' GROUP BY team "
+        "ORDER BY passing_yards DESC LIMIT 1",
+    ),
+    (
         "Who did the Bears play in week 3 of 2015, and what was the score?",
         "SELECT game_date, away_team, away_score, home_team, home_score FROM games "
         "WHERE season = 2015 AND week = 3 AND (home_team = 'CHI' OR away_team = 'CHI')",
