@@ -66,7 +66,7 @@ handwritten reference SQL, not by matching query text. The prompt was tuned on a
 `qwen2.5-coder:7b` went from 7/15 to 14/15 correct on development and from 3/15 to 9/15
 on held-out. The development set has since grown to 68 questions covering every view and
 the `plays` columns the schema card leaves out, which a question gets listed when it needs
-them; the current score is 44/68, and 9/15 held-out. Per-question results are in
+them; the current score is 46/68, and 9/15 held-out. Per-question results are in
 [docs/text_to_sql_eval.md](docs/text_to_sql_eval.md)
 and [docs/text_to_sql_holdout_eval.md](docs/text_to_sql_holdout_eval.md).
 
@@ -223,7 +223,7 @@ to keywords rather than failing the request. On the original 20-question golden 
 routers scored 19/20 ([docs/routing_eval.md](docs/routing_eval.md)), which is the argument
 for keeping the cheap one as the fallback. Facts the warehouse holds, Super Bowl winners
 included, route to SQL; the game summaries answer how a game unfolded. The set is now 29
-questions, and the keyword router scores 29/29.
+questions: the keyword router scores 29/29, and the LLM and hybrid routers 28/29.
 
 Every dependency is optional at startup. Missing Postgres drops the narrative tool,
 missing model artifacts drop the advisor, missing Ollama drops LLM routing — the API

@@ -2,18 +2,18 @@
 
 - questions: 68
 - produced a runnable query: 66/68
-- correct result: 44/68
-- repair attempts used: 19
+- correct result: 46/68
+- repair attempts used: 17
 
 | question | correct | detail |
 | --- | --- | --- |
 | team-season-pass-rate | yes | matches reference |
-| most-pass-happy-neutral | no | declined to answer |
+| most-pass-happy-neutral | yes | matches reference |
 | third-and-long-epa | yes | matches reference |
 | red-zone-td-rate | yes | matches reference |
 | coldest-game | yes | matches reference |
-| qb-epa-leader | no | expected [('P.Mahomes',)], got [('M.Stafford', 0.219269685903803)] |
-| fourth-down-attempts-trend | no | expected [(2019, 618), (2020, 691), (2021, 820)], got [(2023, 871), (2022, 786), (2021, 855)] |
+| qb-epa-leader | no | expected [('P.Mahomes',)], got [('M.Stafford', 0.21926968590380297)] |
+| fourth-down-attempts-trend | no | expected [(2019, 618), (2020, 691), (2021, 820)], got [(2019, 646), (2020, 726), (2021, 855)] |
 | shotgun-share | yes | matches reference |
 | home-win-rate | yes | matches reference |
 | team-epa-ranking | yes | matches reference |
@@ -35,20 +35,20 @@
 | regular-season-wins | no | expected [(14,)], got [(8,)] |
 | regular-season-default-player | yes | matches reference |
 | unanswerable-salary | yes | declined |
-| empty-lions-super-bowl | no | invented an answer: [('2023_20_TB_DET',), ('2023_21_DET_SF',), ('2011_18_DET_NO',)] |
-| empty-brady-2023 | no | Binder Error: Referenced column "rush_touchdown" not found in FROM clause! |
+| empty-lions-super-bowl | no | invented an answer: [('2023_19_LA_DET',), ('2014_18_DET_DAL',), ('2023_20_TB_DET',)] |
+| empty-brady-2023 | yes | found nothing, correctly |
 | empty-browns-2015-playoffs | yes | found nothing, correctly |
 | super-bowl-lx-winner | yes | matches reference |
 | team-rushing-leader-2025 | yes | matches reference |
-| team-third-down-leader | no | expected [('KC',)], got [('NE', 0.800000011920929)] |
+| team-third-down-leader | yes | matches reference |
 | team-fourth-down-conversions | yes | matches reference |
-| team-games-above-epa | no | declined to answer |
-| team-most-interceptions | yes | matches reference |
+| team-games-above-epa | no | expected [(3,)], got [(76,), (54,), (64,)] |
+| team-most-interceptions | no | Binder Error: Referenced column "team" not found in FROM clause! |
 | team-fumbles-lost | yes | matches reference |
 | team-best-game-epa | no | expected [('TEN', 'DET')], got [('TEN', 'DET', 2020, 'REG', 15, 0.49913048292054)] |
 | drive-count | yes | matches reference |
 | drive-punt-share | yes | matches reference |
-| drive-td-share-leader | no | Binder Error: Referenced column "scored_touchdown" not found in FROM clause! |
+| drive-td-share-leader | no | Binder Error: Referenced column "team" not found in FROM clause! |
 | drive-turnover-on-downs | no | expected [(349,)], got [(636,)] |
 | games-outdoors | yes | matches reference |
 | games-highest-scoring | no | expected [(101,)], got [(11680,)] |
@@ -67,7 +67,7 @@
 | longest-field-goal | yes | matches reference |
 | team-sacks-defense | yes | matches reference |
 | most-interceptions-thrown-team | yes | matches reference |
-| pass-rate-over-expected-leader | no | expected [('KC',)], got [('DAL', 74.10213576027091)] |
+| pass-rate-over-expected-leader | no | expected [('KC',)], got [('DAL', 74.1021357602709)] |
 | two-point-attempts | yes | matches reference |
 | qb-scrambles | no | expected [(66,)], got [(0,)] |
 | overtime-games | yes | matches reference |
