@@ -170,6 +170,49 @@ row_counts:
     week by a handful of plays, not 5%
 ```
 
+## Streaming replay (a live win-probability feed)
+
+A finished game, replayed through Redpanda as if it were live
+([`src/fourthdown/streaming/`](src/fourthdown/streaming/)):
+
+```
+warehouse plays --replay--> nfl.plays --score--> nfl.win_probability --watch--> feed
+                                 \--(bad message)--> nfl.plays.dlq
+```
+
+`replay` publishes one game's scrimmage plays in order, keyed by `game_id` (so a game
+stays on one partition, in order), paced by the game clock. `score` consumes them, scores
+each situation with the served win-probability model, and publishes the home team's
+chance. `watch` prints the feed.
+
+```bash
+fourthdown stream demo                  # the whole path in-process, no broker needed
+make stream-up                          # Redpanda and the scorer in Docker
+make stream-replay                      # GAME=2023_22_SF_KC SPEED=60 by default
+fourthdown stream watch                 # the live feed, from the host
+```
+
+Delivery guarantees:
+
+- **At least once.** The scorer commits a play's offset only after its result is
+  delivered, and the producer is idempotent with `acks=all`.
+- **No duplicates in the feed.** It keeps one result per play, so a redelivered result
+  overwrites the first copy instead of adding a point.
+- **No poison pills.** A malformed message goes to `nfl.plays.dlq` with the reason, and
+  the partition keeps moving.
+
+The tests kill the scorer between plays and show the replacement picks up at the right
+play. Super Bowl LVIII on the in-memory broker (`fourthdown stream demo`):
+
+```
+Q4  0:10  SF 19-16 KC  [##############......] KC  70.2% (+25.6)  nflfastR  49.3%  after (:16) (Shotgun) 15-P.Mahomes pass short left to 87-T.Kelce
+...
+FINAL    SF 22-25 KC  [####################] KC 100.0% (+33.0)
+2023_22_SF_KC: 176 plays scored, 15 changes of favourite
+biggest swing: +25.6 points for KC, from (:16) (Shotgun) 15-P.Mahomes pass short left to 87-T.Kelce pushed ob at SF 11 for 22 yards
+mean gap to nflfastR's win probability: 9.6 points
+```
+
 ## Asking questions
 
 Text-to-SQL runs against a local [Ollama](https://ollama.com) model
@@ -580,6 +623,12 @@ src/fourthdown/
     leakage.py        the feature contract: declared pre-snap, no model outputs, no outcome proxies
     freshness.py      the season's finished weeks against what has been ingested
     alerts.py         failures to the log and an optional Slack/Discord webhook
+  streaming/
+    events.py         the messages on nfl.plays and nfl.win_probability, as versioned JSON
+    broker.py         Redpanda/Kafka (confluent-kafka) and an in-memory broker, one interface
+    replay.py         a game from the warehouse onto nfl.plays, paced by the game clock
+    scorer.py         nfl.plays -> win probability -> nfl.win_probability; dead letters
+    feed.py           the live feed and the game summary
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
   sql/filters.py      rerun an empty query with each WHERE condition removed
   feedback.py         the miss log: one JSON line per empty result

@@ -21,7 +21,7 @@ TARGETS = $(SERVICES) pipeline
 # Credentials from .env reach helm as shell variables, so make echoes their names, not their values.
 export POSTGRES_PASSWORD FOURTHDOWN_LLM_BASE_URL FOURTHDOWN_LLM_MODEL FOURTHDOWN_LLM_API_KEY
 
-.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	dagster dagster-pipeline dagster-up 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
+.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	dagster dagster-pipeline dagster-up stream-demo stream-up stream-replay 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -120,6 +120,16 @@ pipeline:
 # The Dagster UI and daemon in Docker (weekly schedule + new-data sensor), on :3000.
 dagster-up:
 	docker compose --profile dagster up -d --build
+
+# Phase 12: replay a game through Redpanda into a live win-probability feed.
+stream-demo:
+	fourthdown stream demo
+
+stream-up:
+	docker compose --profile streaming up -d --build redpanda stream-scorer
+
+stream-replay:
+	docker compose --profile streaming run --rm stream-replay
 
 helm-lint:
 	helm lint $(CHART) --set postgres.password=lint

@@ -328,6 +328,10 @@ def parse_manifest() -> Path:
 
     paths = data_paths()
     with environment(paths):
+        # The manifest is the graph Dagster builds from, so it must not depend on what this
+        # machine has downloaded: parse as if the players file exists, so stg_players
+        # always reads the players source (a fresh checkout or CI has no data).
+        os.environ["FOURTHDOWN_PLAYERS_AVAILABLE"] = "true"
         os.environ["DBT_TARGET_PATH"] = str(target)
         os.environ["DBT_LOG_PATH"] = str(target / "logs")
         from dbt.cli.main import dbtRunner
