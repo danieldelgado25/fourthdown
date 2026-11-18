@@ -1,14 +1,18 @@
-"""DuckDB semantic layer over the processed Parquet partitions.
+"""The DuckDB warehouse: built by dbt, read by every query path.
 
-These views are the only surface the query layer (and later the text-to-SQL prompt)
-sees. Keeping the vocabulary small and pre-joined is what makes generated SQL correct
-often enough to be useful: a model asked to reason about ``team_game`` rarely invents a
-join, whereas a model handed 372 raw columns invents one constantly.
+dbt (``dbt_project/``, run by `fourthdown.data.modeling`) models the processed Parquet as
+a star schema (``core.fact_plays`` and its dimensions) and rebuilds from it the six
+semantic tables in ``main`` that are the only surface the query layer and the text-to-SQL
+prompt see. Keeping that vocabulary small and pre-joined is what makes generated SQL
+correct often enough to be useful: a model asked to reason about ``team_game`` rarely
+invents a join, whereas a model handed 372 raw columns, or a star schema, invents one
+constantly.
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 
 import duckdb
@@ -19,213 +23,11 @@ from fourthdown.data import provenance
 LOGGER = logging.getLogger(__name__)
 
 VIEW_NAMES: tuple[str, ...] = ("plays", "games", "drives", "team_game", "player_game", "players")
-
-# Postseason weeks follow the last regular-season week, which moved from 17 to 18 when the
-# season grew in 2021, so a round is the week's offset from it, not a fixed week number.
-PLAYOFF_ROUND = """CASE WHEN any_value(season_type) = 'POST' THEN
-        CASE any_value(week) - CASE WHEN any_value(season) >= 2021 THEN 18 ELSE 17 END
-            WHEN 1 THEN 'wild_card' WHEN 2 THEN 'divisional'
-            WHEN 3 THEN 'conference' WHEN 4 THEN 'super_bowl'
-        END
-    END"""
-
-PLAYS_VIEW = """
-CREATE OR REPLACE VIEW plays AS
-SELECT * FROM read_parquet('{glob}')
-"""
-
-# The play-by-play only carries abbreviated names ('J.Smith-Njigba'), many shared, plus ids.
-PLAYERS_VIEW = """
-CREATE OR REPLACE VIEW players AS
-SELECT gsis_id AS player_id, display_name AS full_name, position
-FROM read_parquet('{path}')
-WHERE gsis_id IS NOT NULL
-"""
-
-# Until the players file is downloaded, so a warehouse still builds offline.
-NO_PLAYERS_VIEW = """
-CREATE OR REPLACE VIEW players AS
-SELECT NULL::VARCHAR AS player_id, NULL::VARCHAR AS full_name, NULL::VARCHAR AS position
-WHERE false
-"""
-
-GAMES_VIEW = f"""
-CREATE OR REPLACE VIEW games AS
-SELECT
-    game_id,
-    any_value(season) AS season,
-    any_value(season_type) AS season_type,
-    any_value(week) AS week,
-    {PLAYOFF_ROUND} AS playoff_round,
-    any_value(game_date) AS game_date,
-    any_value(home_team) AS home_team,
-    any_value(away_team) AS away_team,
-    any_value(home_score) AS home_score,
-    any_value(away_score) AS away_score,
-    any_value(result) AS home_margin,
-    any_value(total) AS total_points,
-    any_value(spread_line) AS spread_line,
-    any_value(total_line) AS total_line,
-    any_value(div_game) AS div_game,
-    any_value(roof) AS roof,
-    any_value(surface) AS surface,
-    any_value(temp) AS temp,
-    any_value(wind) AS wind,
-    any_value(stadium) AS stadium,
-    any_value(home_coach) AS home_coach,
-    any_value(away_coach) AS away_coach,
-    count(*) AS plays
-FROM plays
-GROUP BY game_id
-"""
-
-DRIVES_VIEW = """
-CREATE OR REPLACE VIEW drives AS
-SELECT
-    drive_id,
-    any_value(game_id) AS game_id,
-    any_value(season) AS season,
-    any_value(season_type) AS season_type,
-    any_value(week) AS week,
-    any_value(posteam) AS posteam,
-    any_value(defteam) AS defteam,
-    any_value(fixed_drive) AS drive_number,
-    any_value(fixed_drive_result) AS drive_result,
-    min(qtr) AS start_quarter,
-    arg_min(yardline_100, play_id) AS start_yardline_100,
-    arg_max(yardline_100, play_id) AS end_yardline_100,
-    arg_min(game_seconds_remaining, play_id) AS end_game_seconds_remaining,
-    count(*) AS plays,
-    count(*) FILTER (WHERE is_designed_play) AS designed_plays,
-    sum(yards_gained) AS yards_gained,
-    sum(first_down::INT) AS first_downs,
-    sum(epa) AS epa,
-    avg(epa) AS epa_per_play,
-    coalesce(any_value(fixed_drive_result) = 'Touchdown', false) AS scored_touchdown
-FROM plays
-WHERE drive_id IS NOT NULL AND posteam IS NOT NULL
-GROUP BY drive_id
-"""
-
-TEAM_GAME_VIEW = f"""
-CREATE OR REPLACE VIEW team_game AS
-SELECT
-    game_id,
-    posteam AS team,
-    any_value(defteam) AS opponent,
-    any_value(season) AS season,
-    any_value(season_type) AS season_type,
-    any_value(week) AS week,
-    {PLAYOFF_ROUND} AS playoff_round,
-    any_value(posteam_is_home) AS is_home,
-    count(*) AS plays,
-    count(*) FILTER (WHERE is_designed_play) AS designed_plays,
-    avg(is_pass_call::INT) FILTER (WHERE is_designed_play) AS pass_rate,
-    avg(is_pass_call::INT) FILTER (WHERE is_designed_play AND is_neutral_script)
-        AS neutral_pass_rate,
-    avg(epa) FILTER (WHERE is_designed_play) AS epa_per_play,
-    avg(epa) FILTER (WHERE is_designed_play AND pass_play) AS pass_epa_per_play,
-    avg(epa) FILTER (WHERE is_designed_play AND rush_play) AS rush_epa_per_play,
-    avg(success::INT) FILTER (WHERE is_designed_play) AS success_rate,
-    sum(yards_gained) FILTER (WHERE is_designed_play) AS yards_gained,
-    sum(touchdown::INT) AS touchdowns,
-    sum(interception::INT) AS interceptions,
-    sum(fumble_lost::INT) AS fumbles_lost,
-    sum(third_down_converted::INT) AS third_down_conversions,
-    count(*) FILTER (WHERE down = 3 AND is_designed_play) AS third_down_attempts,
-    sum(fourth_down_converted::INT) AS fourth_down_conversions,
-    count(*) FILTER (WHERE down = 4 AND is_designed_play) AS fourth_down_attempts
-FROM plays
-WHERE posteam IS NOT NULL
-GROUP BY game_id, posteam
-"""
-
-# Box-score conventions: two-point tries are not plays, sack yardage is charged to the team
-# rather than the passer, and a touchdown counts for a role only when that role scored it
-# (`touchdown` alone also fires on the defence's pick-six or fumble return). A receiver's
-# `plays` are targets, incompletions included; `completions` are the catches.
-PLAYER_GAME_VIEW = f"""
-CREATE OR REPLACE VIEW player_game AS
-WITH roles AS (
-SELECT
-    game_id, season, season_type, week, {PLAYOFF_ROUND} AS playoff_round,
-    posteam AS team, 'passer' AS role,
-    passer_player_id AS player_id, passer_player_name AS player_name,
-    count(*) AS plays,
-    coalesce(sum(yards_gained) FILTER (WHERE NOT coalesce(sack, false)), 0) AS yards,
-    sum(coalesce(pass_touchdown, false)::INT) AS touchdowns,
-    sum(coalesce(complete_pass, false)::INT) AS completions,
-    avg(epa) AS epa_per_play,
-    avg(cpoe) AS cpoe
-FROM plays
-WHERE passer_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
-GROUP BY ALL
-UNION ALL
-SELECT
-    game_id, season, season_type, week, {PLAYOFF_ROUND} AS playoff_round,
-    posteam AS team, 'rusher' AS role,
-    rusher_player_id AS player_id, rusher_player_name AS player_name,
-    count(*) AS plays,
-    sum(yards_gained) AS yards,
-    sum(coalesce(rush_touchdown, false)::INT) AS touchdowns,
-    NULL AS completions,
-    avg(epa) AS epa_per_play,
-    NULL AS cpoe
-FROM plays
-WHERE rusher_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
-GROUP BY ALL
-UNION ALL
-SELECT
-    game_id, season, season_type, week, {PLAYOFF_ROUND} AS playoff_round,
-    posteam AS team, 'receiver' AS role,
-    receiver_player_id AS player_id, receiver_player_name AS player_name,
-    count(*) AS plays,
-    sum(yards_gained) AS yards,
-    sum(coalesce(pass_touchdown, false)::INT) AS touchdowns,
-    sum(coalesce(complete_pass, false)::INT) AS completions,
-    avg(epa) AS epa_per_play,
-    NULL AS cpoe
-FROM plays
-WHERE receiver_player_id IS NOT NULL AND NOT coalesce(two_point_attempt, false)
-GROUP BY ALL
-)
-SELECT roles.*, players.full_name
-FROM roles LEFT JOIN players USING (player_id)
-"""
-
-# Creation order: every view after the ones it reads.
-VIEW_SQL: dict[str, str] = {
-    "plays": PLAYS_VIEW,
-    "players": PLAYERS_VIEW,
-    "games": GAMES_VIEW,
-    "drives": DRIVES_VIEW,
-    "team_game": TEAM_GAME_VIEW,
-    "player_game": PLAYER_GAME_VIEW,
-}
-VIEW_READS: dict[str, tuple[str, ...]] = {
-    "plays": (provenance.PROCESSED_SOURCE,),
-    "players": (provenance.PLAYERS_SOURCE,),
-    "games": ("plays",),
-    "drives": ("plays",),
-    "team_game": ("plays",),
-    "player_game": ("plays", "players"),
-}
-
-
-def view_sql(paths: Paths) -> dict[str, str]:
-    """The SQL each view is built from on this data root."""
-    if paths.players.exists():
-        return VIEW_SQL
-    return {**VIEW_SQL, "players": NO_PLAYERS_VIEW}
-
-
-def processed_glob(paths: Paths) -> str:
-    """Relative to the data root, so the database survives being mounted somewhere else."""
-    return (paths.processed / "season=*" / "*.parquet").relative_to(paths.root).as_posix()
+"""The semantic layer (dbt_project/models/semantic): what generated SQL may read."""
 
 
 def _anchor(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
-    """Resolve the views' relative Parquet glob against this machine's data root.
+    """Resolve the staging views' relative Parquet paths against this machine's data root.
 
     GLOBAL, so cursors taken from the connection for concurrent requests inherit it.
     """
@@ -233,16 +35,16 @@ def _anchor(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
     connection.execute(f"SET GLOBAL file_search_path = '{root}'")
 
 
-def create_views(connection: duckdb.DuckDBPyConnection, paths: Paths) -> None:
-    """Define every view against the processed partitions of ``paths``."""
-    _anchor(connection, paths)
-    players = paths.players.relative_to(paths.root).as_posix()
-    for sql in view_sql(paths).values():
-        connection.execute(sql.format(glob=processed_glob(paths), path=players))
+def build(
+    paths: Paths | None = None, *, database: Path | None = None, run_tests: bool = True
+) -> Path:
+    """Build the warehouse with dbt (``dbt_project/``), and swap it in only if it passed.
 
+    ``run_tests=False`` skips the data tests, for synthetic datasets too small to pass the
+    league-wide ones; it also forgets the last build's results, which no longer apply.
+    """
+    from fourthdown.data import modeling  # dbt is a pipeline dependency, not a service one
 
-def build(paths: Paths | None = None, *, database: Path | None = None) -> Path:
-    """Create (or refresh) the DuckDB database holding the semantic layer."""
     resolved = paths or data_paths()
     resolved.ensure()
     partitions = sorted(resolved.processed.glob("season=*/*.parquet"))
@@ -251,17 +53,28 @@ def build(paths: Paths | None = None, *, database: Path | None = None) -> Path:
             f"no processed partitions under {resolved.processed}. Run `fourthdown etl` first."
         )
     target = database or resolved.database
-    target.parent.mkdir(parents=True, exist_ok=True)
     # Build beside the live file and swap it in: a running warehouse service holds a
     # read-only lock on the live one, which a writer cannot take but a rename never needs.
-    staging = target.with_name(f"{target.name}.building")
-    staging.unlink(missing_ok=True)
-    with duckdb.connect(str(staging)) as connection:
-        create_views(connection, resolved)
+    # The staging file keeps the live file's name (in its own directory) because DuckDB
+    # names the catalog after the file, and dbt writes the catalog into every view.
+    staging_dir = target.parent / ".building"
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    staging_dir.mkdir(parents=True)
+    staging = staging_dir / target.name
+    outcome = modeling.build(resolved, staging, run_tests=run_tests)
+    with duckdb.connect(str(staging), read_only=True) as connection:
+        _anchor(connection, resolved)
         rows = connection.execute("SELECT count(*) FROM plays").fetchone()
-        LOGGER.info("warehouse at %s covers %s plays in %d seasons", target, rows, len(partitions))
+    LOGGER.info("warehouse at %s covers %s plays in %d seasons", target, rows, len(partitions))
     staging.replace(target)
-    manifest = provenance.record_views(resolved, view_sql(resolved), VIEW_READS)
+    shutil.rmtree(staging_dir, ignore_errors=True)
+    if run_tests:
+        modeling.save_test_results(resolved, outcome.tests)
+    else:
+        (resolved.warehouse / modeling.TEST_RESULTS_FILE).unlink(missing_ok=True)
+    manifest = provenance.record_models(
+        resolved, outcome.models, project_sha256=modeling.project_sha256()
+    )
     LOGGER.info("data version %s", manifest.data_version)
     return target
 

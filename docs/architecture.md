@@ -15,7 +15,7 @@ React dashboard  ──>  Flask API  ──>  agent orchestrator
 ```
 
 The design constraint behind all of it: **the LLM never sees the play table and never does
-arithmetic.** Embedding 768k rows and retrieving by cosine similarity cannot answer "how
+arithmetic.** Embedding 817k rows and retrieving by cosine similarity cannot answer "how
 many", "most", or "average", which is most of what anyone asks of a play-by-play dataset.
 So numeric questions go to SQL, narrative questions go to retrieval over generated prose,
 and predictive questions go to a trained model. The model's job is routing, query
@@ -25,7 +25,7 @@ authoring, and explanation.
 
 | question type | example | path |
 | --- | --- | --- |
-| aggregate | "EPA per dropback on third and long in 2014" | text-to-SQL over the DuckDB views |
+| aggregate | "EPA per dropback on third and long in 2014" | text-to-SQL over the DuckDB semantic layer |
 | narrative | "what happened on the final drive of Super Bowl XLIX" | hybrid BM25 + dense retrieval over drive summaries |
 | predictive | "4th and 2 on their own 45, down 4, three minutes left — go for it?" | win-probability model, evaluated for each decision |
 
@@ -35,18 +35,87 @@ authoring, and explanation.
 data/raw/pbp/play_by_play_<season>.parquet      nflverse release, untouched
 data/raw/players.parquet                         nflverse player ids -> full names
 data/processed/plays/season=<season>/plays.parquet   projected, typed, feature-derived
-data/warehouse/fourthdown.duckdb                 six views over the partitions
+data/warehouse/fourthdown.duckdb                 built by dbt from dbt_project/
 ```
 
 One lazy Polars plan per season does projection, type normalisation, and feature
 derivation; partitions are written independently so a new season is an incremental
 `fourthdown build --seasons 2025` rather than a full rebuild.
 
-The six views (`plays`, `games`, `drives`, `team_game`, `player_game`, `players`) are the entire
-surface the query layer sees. This is a deliberate text-to-SQL decision: a model asked to
-write SQL against `team_game` rarely invents a join, while a model handed 372 raw columns
-invents one constantly. Anything the views cannot express is a signal to add a view, not
-to widen the prompt.
+### The warehouse is a dbt project (phase 08)
+
+`dbt_project/` turns the processed partitions into the warehouse in four layers, one DuckDB
+schema each. `fourthdown warehouse` runs it (`dbt build`, in-process, through
+`src/fourthdown/data/modeling.py`):
+
+```
+nflverse.processed_plays -> staging.stg_plays --+--> core.dim_season --> core.dim_game --+
+nflverse.players -------> staging.stg_players --+                                        |
+seed teams.csv ---------------------------------+--> core.dim_team                       |
+                                                +--> core.dim_player                     |
+                                                +--> core.fact_plays --------------------+
+                                                                                         v
+                              marts.mart_team_season_tendencies    main.plays, games, drives,
+                              (the dashboard's tendency panel)     team_game, player_game, players
+                                                                   (text-to-SQL's semantic layer)
+```
+
+| layer | schema | materialized | what it is |
+| --- | --- | --- | --- |
+| staging | `staging` | view | the Parquet as the ETL wrote it, plus a `play_key`; paths relative to the data root |
+| core | `core` | table | the star schema: `fact_plays` (one row per play) and `dim_game`, `dim_team`, `dim_player`, `dim_season` |
+| marts | `marts` | table | `mart_team_season_tendencies`: one row per team-season, built for one consumer |
+| semantic | `main` | table (`plays`, `players`: view) | the six names the text-to-SQL prompt is written against, rebuilt from the star schema |
+
+**Why a star schema under an unchanged semantic layer.** `fact_plays` keeps a play's
+situation, outcome, and model outputs, plus its keys. The 19 attributes nflverse repeats
+on every play of a game (teams, score, lines, weather, venue, coaches) live once on
+`dim_game`. The split is provably lossless: a data test fails if any game carries two
+values for one of them, and the slow suite checks `plays` (the fact joined back to the
+game) against the processed Parquet with `EXCEPT ALL`. Playoff rounds now come from one
+rule on `dim_season` (17 regular-season weeks through 2020, 18 since) instead of a CASE
+repeated in three views, and a test holds that rule to the schedule actually played.
+
+The LLM still sees only the six semantic tables. The text-to-SQL prompt, the golden sets,
+and their scores are written against those names, and a model handed a star schema
+invents joins the way a model handed 372 columns does. The SQL guard already admits only
+unqualified names from that list in the `main` schema, so generated SQL cannot reach
+`core` or `marts`. Moving the model onto the star schema would be its own experiment,
+scored against the holdout set like any other prompt change. The remodel reproduced all
+six relations row for row on 2009-2025; one `team_game` average differs in its 17th
+significant digit, from summation order.
+
+**`core` and `marts` are written to be portable.** They use `count_if`, `CASE`,
+`* EXCLUDE`, and `mode()` rather than DuckDB's `FILTER` and `::` casts, so a second
+target (Snowflake) can build them unchanged. The semantic models keep DuckDB SQL, because
+they exist for a DuckDB-only consumer.
+
+**Data tests gate the build.** The checks that used to be Python in `audit.py` are now 64
+dbt tests:
+
+- `unique` and `not_null` on every grain;
+- `relationships` from each fact key to its dimension. Players credited in the
+  play-by-play but missing from nflverse's player table still get a `dim_player` row, so
+  the passer, rusher, and receiver keys always resolve;
+- `accepted_values` on every label column;
+- custom generic tests in `dbt_project/macros/tests/` for what the built-ins cannot say:
+  value ranges, a league mean inside a band (pass rate 0.52-0.65, EPA per play within
+  0.05 of zero), and a null-rate ceiling on the win label. They are macros rather than
+  `dbt_utils` so that a build never runs `dbt deps` or needs the network.
+
+`dbt build` runs each model's tests before building what depends on it. `warehouse.build`
+builds into a side directory and swaps the file in only when everything passed, so a bad
+upstream release fails the pipeline while the live warehouse keeps serving.
+`fourthdown audit` renders the last build's results beside the coverage tables in
+[data_audit.md](data_audit.md).
+
+**One profile for the laptop, the container, and the tests.** The profile reads its paths
+from the environment (`FOURTHDOWN_DATA_DIR`, `FOURTHDOWN_DBT_DATABASE`). dbt's target and
+log directories go under the data root, because the project directory is read-only in the
+container. `fourthdown dbt <command>` sets the same environment around any dbt command
+(`fourthdown dbt docs generate`, `fourthdown dbt test --select fact_plays`). CI uploads the
+generated docs site, whose lineage graph runs from the Parquet sources to the semantic
+tables.
 
 ## Query layer (built)
 
@@ -256,9 +325,9 @@ codes to names and postseason weeks to "Super Bowl XLIX (49)". Deterministic mat
 re-indexing a season produces byte-identical text, so upserts are idempotent and the
 embedding cost is paid once.
 
-**Rows are not embedded.** 768k plays would be 768k vectors of mostly boilerplate, and
-cosine similarity over them answers nothing a `GROUP BY` does not answer better. 4.3k
-games plus 99k drives is the grain at which a question is actually asked.
+**Rows are not embedded.** 817k plays would be 817k vectors of mostly boilerplate, and
+cosine similarity over them answers nothing a `GROUP BY` does not answer better. 4.6k
+games plus 105k drives is the grain at which a question is actually asked.
 
 **Both halves of retrieval, fused by rank.** Dense search generalises ("collapse" finds
 a blown lead); lexical search does not miss a name or a number ("Super Bowl LVII",
@@ -444,11 +513,11 @@ view name in the warehouse schema.
 | --- | --- |
 | `ingest` | per season: source URL, SHA-256, bytes, and the ETag / Last-Modified of the download |
 | `etl` | per partition: rows, SHA-256, the SHA-256 of the raw file it came from, and a hash of `etl.py` + `schema.py` |
-| `warehouse` | per view: the SHA-256 of its SQL and what it reads (`plays` reads the partitions; the other four read `plays`) |
+| `warehouse` | per dbt model and seed: the SHA-256 of its file, its schema and materialization, and what it reads; plus one hash over the macros, seed, and `dbt_project.yml` |
 
 nflverse republishes the current season's file in place, so a season number does not
 identify data; the hash does. `data_version` is a 12-character hash over the processed
-partition hashes and the view SQL. `fourthdown lineage --verify` rehashes every file and
+partition hashes and the dbt code. `fourthdown lineage --verify` rehashes every file and
 fails if a raw file changed, a partition was edited, a partition was built from a raw
 file that has since been replaced, or the transform code changed after the ETL ran. The
 human-readable version is [lineage.md](lineage.md).
@@ -558,3 +627,4 @@ kind port mapping.
 | 07a | provenance, MLflow tracking, containerized win-probability API | done |
 | 07b | full stack in Docker Compose, Helm chart on a local kind cluster | done |
 | 07c | gateway and tool services, provider-agnostic LLM, hybrid routing | done |
+| 08 | dbt: star schema, tendency mart, data tests that gate the build, dbt docs in CI | done |

@@ -4,6 +4,7 @@
 !pyproject.toml
 !README.md
 !src/
+!dbt_project/
 !web/
 web/node_modules
 web/dist

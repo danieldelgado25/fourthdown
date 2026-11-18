@@ -8,10 +8,12 @@ Each step records what it wrote into one manifest at ``Paths.manifest``:
   "2024" apart.
 * ``processed``: each season partition, its row count, its SHA-256, the hash of the raw
   file it was derived from, and the hash of the transform code that derived it.
-* ``views``: each DuckDB view, the hash of its SQL, and what it reads.
-* ``players_sha256``: the nflverse player table the ``players`` view read, if any.
+* ``models``: each dbt model and seed (``dbt_project/``) the warehouse was built from: its
+  file's hash, schema, materialization, and what it reads. ``project_sha256`` covers the
+  rest of the project that shapes the output (macros, the seed, ``dbt_project.yml``).
+* ``players_sha256``: the nflverse player table the warehouse read, if any.
 
-``data_version`` folds the processed hashes, players file, and view SQL into one short id.
+``data_version`` folds the processed hashes and the dbt code into one short id.
 A training run logs it, the model card carries it, and the serving API returns it with every
 prediction, so a probability can be traced back to the exact bytes it was trained on.
 """
@@ -21,19 +23,19 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fourthdown import __version__
 from fourthdown.config import Paths
+from fourthdown.data import modeling
+from fourthdown.data.modeling import ModelRecord
 
 CHUNK_SIZE = 1 << 20
 DATA_VERSION_CHARS = 12
 TRANSFORM_SOURCES = ("etl.py", "schema.py")
-PROCESSED_SOURCE = "processed partitions"
-PLAYERS_SOURCE = "nflverse players"
 
 
 def sha256_file(path: Path) -> str:
@@ -42,10 +44,6 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(CHUNK_SIZE), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def transform_sha256() -> str:
@@ -100,18 +98,12 @@ class PartitionRecord:
     written_at: str
 
 
-@dataclass(frozen=True)
-class ViewRecord:
-    name: str
-    sql_sha256: str
-    reads: tuple[str, ...]
-
-
 @dataclass
 class Manifest:
     raw: dict[int, RawRecord] = field(default_factory=dict)
     processed: dict[int, PartitionRecord] = field(default_factory=dict)
-    views: dict[str, ViewRecord] = field(default_factory=dict)
+    models: dict[str, ModelRecord] = field(default_factory=dict)
+    project_sha256: str | None = None
     players_sha256: str | None = None
     package_version: str = __version__
     git_commit: str | None = None
@@ -119,12 +111,14 @@ class Manifest:
 
     @property
     def data_version(self) -> str:
-        """One id for the processed bytes plus the SQL that shapes them into tables."""
+        """One id for the processed bytes plus the dbt code that shapes them into tables."""
         digest = hashlib.sha256()
         for season in sorted(self.processed):
             digest.update(f"{season}:{self.processed[season].sha256}\n".encode())
-        for name in sorted(self.views):
-            digest.update(f"{name}:{self.views[name].sql_sha256}\n".encode())
+        for name in sorted(self.models):
+            digest.update(f"{name}:{self.models[name].sha256}\n".encode())
+        if self.project_sha256:
+            digest.update(f"project:{self.project_sha256}\n".encode())
         return digest.hexdigest()[:DATA_VERSION_CHARS]
 
     @property
@@ -141,7 +135,8 @@ class Manifest:
             "processed": {
                 str(season): asdict(record) for season, record in sorted(self.processed.items())
             },
-            "views": {name: asdict(record) for name, record in self.views.items()},
+            "models": {name: asdict(record) for name, record in self.models.items()},
+            "project_sha256": self.project_sha256,
             "players_sha256": self.players_sha256,
         }
         return json.dumps(payload, indent=2) + "\n"
@@ -149,11 +144,11 @@ class Manifest:
     @classmethod
     def from_json(cls, text: str) -> Manifest:
         payload = json.loads(text)
-        views = {
-            name: ViewRecord(
-                name=record["name"], sql_sha256=record["sql_sha256"], reads=tuple(record["reads"])
-            )
-            for name, record in payload.get("views", {}).items()
+        # A manifest from before dbt has "views" instead; it reads as having no models, so
+        # `lineage --verify` asks for a rebuild.
+        models = {
+            name: ModelRecord(**{**record, "reads": tuple(record["reads"])})
+            for name, record in payload.get("models", {}).items()
         }
         return cls(
             raw={int(key): RawRecord(**record) for key, record in payload.get("raw", {}).items()},
@@ -161,7 +156,8 @@ class Manifest:
                 int(key): PartitionRecord(**record)
                 for key, record in payload.get("processed", {}).items()
             },
-            views=views,
+            models=models,
+            project_sha256=payload.get("project_sha256"),
             players_sha256=payload.get("players_sha256"),
             package_version=str(payload.get("package_version", __version__)),
             git_commit=payload.get("git_commit"),
@@ -239,15 +235,11 @@ def record_partition(paths: Paths, season: int, *, rows: int) -> PartitionRecord
     return record
 
 
-def record_views(
-    paths: Paths, statements: Mapping[str, str], reads: Mapping[str, tuple[str, ...]]
-) -> Manifest:
-    """Record the SQL behind every view; partitions no longer on disk drop out."""
+def record_models(paths: Paths, models: Sequence[ModelRecord], *, project_sha256: str) -> Manifest:
+    """Record the dbt code a warehouse build ran; partitions no longer on disk drop out."""
     manifest = load(paths)
-    manifest.views = {
-        name: ViewRecord(name=name, sql_sha256=sha256_text(sql.strip()), reads=reads[name])
-        for name, sql in statements.items()
-    }
+    manifest.models = {model.name: model for model in models}
+    manifest.project_sha256 = project_sha256
     manifest.players_sha256 = sha256_file(paths.players) if paths.players.exists() else None
     on_disk = {season for season in manifest.processed if paths.season_processed(season).exists()}
     manifest.processed = {season: manifest.processed[season] for season in sorted(on_disk)}
@@ -284,12 +276,19 @@ def verify(paths: Paths) -> list[str]:
         not paths.players.exists() or sha256_file(paths.players) != manifest.players_sha256
     ):
         problems.append("players: file changed since the warehouse read it; rerun warehouse")
-    from fourthdown.data.warehouse import view_sql  # warehouse imports this module
-
-    current = view_sql(paths)
-    for name, record in sorted(manifest.views.items()):
-        if name in current and record.sql_sha256 != sha256_text(current[name].strip()):
-            problems.append(f"view {name}: SQL changed since; rerun warehouse")
+    elif manifest.models and not manifest.players_sha256 and paths.players.exists():
+        problems.append("players: file arrived since the warehouse was built; rerun warehouse")
+    if not manifest.models:
+        problems.append("no dbt models recorded; rerun warehouse")
+    project = modeling.project_dir()
+    for name, model in sorted(manifest.models.items()):
+        source = project / model.path
+        if not source.exists():
+            problems.append(f"model {name}: {model.path} is missing; rerun warehouse")
+        elif modeling.sha256_file(source) != model.sha256:
+            problems.append(f"model {name}: {model.path} changed since; rerun warehouse")
+    if manifest.models and manifest.project_sha256 != modeling.project_sha256():
+        problems.append("dbt project: macros, seeds, or config changed since; rerun warehouse")
     return problems
 
 
@@ -312,14 +311,18 @@ def render(manifest: Manifest) -> str:
         "the full values are in `data/manifest.json`. `fourthdown lineage --verify` rehashes",
         "every file and fails if any of them changed.",
         "",
-        "## Views",
+        "## dbt models",
         "",
-        "| view | reads | SQL hash |",
-        "| --- | --- | --- |",
+        "Built by `dbt build` from `dbt_project/`; `fourthdown dbt docs generate` draws the",
+        f"same graph. Macros, seed, and config hash: {_short(manifest.project_sha256)}.",
+        "",
+        "| model | schema | materialized | reads | file hash |",
+        "| --- | --- | --- | --- | --- |",
     ]
     lines += [
-        f"| {view.name} | {', '.join(view.reads)} | {_short(view.sql_sha256)} |"
-        for view in manifest.views.values()
+        f"| {model.name} | {model.schema} | {model.materialized} | {', '.join(model.reads)} "
+        f"| {_short(model.sha256)} |"
+        for model in manifest.models.values()
     ]
     lines += [
         "",

@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: mart_team_season_tendencies
+    description: >
+      One row per team and season: pass rate, efficiency, success rate, pass rate over
+      expected, fourth-down aggressiveness, and the same rates in neutral game script.
+    data_tests:
+      - unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [team, season]
+    columns:
+      - name: team
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team
+      - name: season
+        data_tests: [not_null]
+      - name: pass_rate
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: neutral_pass_rate
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: fourth_down_go_rate
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 1

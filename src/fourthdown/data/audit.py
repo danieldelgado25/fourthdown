@@ -1,18 +1,22 @@
-"""Dataset audit: per-season coverage plus the sanity checks the tests assert on.
+"""Dataset audit: per-season coverage, plus the results of the warehouse's data tests.
 
-The checks encode what we believe about the data (a season has 32 teams and ~256 regular
-season games; league pass rate sits in the high 50s; EPA is roughly zero-sum). They run
-in CI against whatever seasons are on disk, so a silently broken transform or a changed
-upstream release surfaces as a failure rather than as a wrong answer three phases later.
+What we believe about the data (a season has 32 teams and ~256 regular-season games;
+league pass rate sits in the high 50s; EPA is roughly zero-sum; every key resolves to its
+dimension) is encoded as dbt tests in ``dbt_project/``, which run on every warehouse
+build and stop a bad one from replacing the live warehouse. This report lists their
+results from the last build beside the coverage tables, so a silently broken transform
+or a changed upstream release surfaces as a failure rather than as a wrong answer later.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
+
+from fourthdown.data.modeling import TestResult
 
 SUMMARY_QUERY = """
 SELECT
@@ -41,121 +45,10 @@ ORDER BY plays DESC
 """
 
 
-@dataclass(frozen=True)
-class Check:
-    name: str
-    passed: bool
-    detail: str
-
-    @property
-    def marker(self) -> str:
-        return "pass" if self.passed else "FAIL"
-
-
-def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> float | int | None:
-    row = connection.execute(sql).fetchone()
-    return None if row is None else row[0]
-
-
-def run_checks(connection: duckdb.DuckDBPyConnection) -> list[Check]:
-    """Validate the processed table against known properties of NFL play-by-play data."""
-    checks: list[Check] = []
-
-    duplicates = _scalar(
-        connection,
-        "SELECT count(*) FROM (SELECT game_id, play_id FROM plays "
-        "GROUP BY game_id, play_id HAVING count(*) > 1)",
-    )
-    checks.append(
-        Check("unique play keys", duplicates == 0, f"{duplicates} duplicated (game_id, play_id)")
-    )
-
-    teams = _scalar(
-        connection,
-        "SELECT max(teams) FROM (SELECT season, count(DISTINCT posteam) AS teams FROM plays "
-        "WHERE posteam IS NOT NULL GROUP BY season)",
-    )
-    checks.append(Check("32 teams per season", teams == 32, f"max distinct posteam = {teams}"))
-
-    regular_games = _scalar(
-        connection,
-        "SELECT min(games) FROM (SELECT season, count(DISTINCT game_id) AS games FROM plays "
-        "WHERE season_type = 'REG' GROUP BY season)",
-    )
-    checks.append(
-        Check(
-            "full regular seasons",
-            regular_games is not None and regular_games >= 256,
-            f"fewest regular season games in a season = {regular_games}",
-        )
-    )
-
-    pass_rate = _scalar(
-        connection,
-        "SELECT avg(is_pass_call::INT) FROM plays WHERE is_designed_play",
-    )
-    checks.append(
-        Check(
-            "league pass rate in [0.52, 0.65]",
-            pass_rate is not None and 0.52 <= pass_rate <= 0.65,
-            f"pass rate = {pass_rate:.4f}" if pass_rate is not None else "no designed plays",
-        )
-    )
-
-    epa = _scalar(connection, "SELECT avg(epa) FROM plays WHERE is_designed_play")
-    checks.append(
-        Check(
-            "EPA per play near zero",
-            epa is not None and abs(epa) < 0.05,
-            f"mean EPA = {epa:.4f}" if epa is not None else "no EPA",
-        )
-    )
-
-    down_range = _scalar(
-        connection,
-        "SELECT count(*) FROM plays WHERE down IS NOT NULL AND (down < 1 OR down > 4)",
-    )
-    checks.append(Check("downs within 1-4", down_range == 0, f"{down_range} out-of-range downs"))
-
-    yardline_range = _scalar(
-        connection,
-        "SELECT count(*) FROM plays WHERE yardline_100 IS NOT NULL "
-        "AND (yardline_100 < 0 OR yardline_100 > 100)",
-    )
-    checks.append(
-        Check(
-            "yardline_100 within 0-100",
-            yardline_range == 0,
-            f"{yardline_range} out-of-range yardlines",
-        )
-    )
-
-    orphan_calls = _scalar(
-        connection,
-        "SELECT count(*) FROM plays WHERE is_pass_call IS NOT NULL AND NOT is_designed_play",
-    )
-    checks.append(
-        Check(
-            "play-call label only on designed plays",
-            orphan_calls == 0,
-            f"{orphan_calls} labelled non-designed plays",
-        )
-    )
-
-    label_nulls = _scalar(
-        connection,
-        "SELECT avg(CASE WHEN posteam_won IS NULL THEN 1 ELSE 0 END) FROM plays "
-        "WHERE posteam IS NOT NULL",
-    )
-    checks.append(
-        Check(
-            "win label present (ties excepted)",
-            label_nulls is not None and label_nulls < 0.01,
-            f"null rate = {label_nulls:.4f}" if label_nulls is not None else "no rows",
-        )
-    )
-
-    return checks
+def _detail(test: TestResult) -> str:
+    if test.passed:
+        return "0 failing rows"
+    return f"{test.failures} failing rows" if test.failures else test.message
 
 
 def _markdown_table(columns: list[str], rows: list[tuple]) -> str:
@@ -168,7 +61,7 @@ def _markdown_table(columns: list[str], rows: list[tuple]) -> str:
     return "\n".join([header, divider, *body])
 
 
-def render_report(connection: duckdb.DuckDBPyConnection) -> str:
+def render_report(connection: duckdb.DuckDBPyConnection, tests: Sequence[TestResult] | None) -> str:
     """Build the Markdown audit report for the seasons currently in the warehouse."""
     summary = connection.execute(SUMMARY_QUERY)
     summary_columns = [description[0] for description in summary.description]
@@ -178,17 +71,28 @@ def render_report(connection: duckdb.DuckDBPyConnection) -> str:
     play_type_columns = [description[0] for description in play_types.description]
     play_type_rows = play_types.fetchall()
 
-    checks = run_checks(connection)
-    check_rows = [(check.name, check.marker, check.detail) for check in checks]
+    if tests:
+        failed = [test for test in tests if not test.passed]
+        check_rows = [
+            (test.name, "pass" if test.passed else "FAIL", _detail(test))
+            for test in sorted(tests, key=lambda test: (test.passed, test.name))
+        ]
+        checks = (
+            f"{len(tests) - len(failed)} of {len(tests)} dbt data tests passed on the last "
+            "warehouse build (`dbt build` in `fourthdown warehouse`), failures first.\n\n"
+            + _markdown_table(["test", "result", "detail"], check_rows)
+        )
+    else:
+        checks = "No data test results: the last warehouse build ran without tests."
 
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     return f"""# Data audit
 
 Generated {generated} by `fourthdown audit`. Source: nflverse play-by-play releases.
 
-## Checks
+## Data tests
 
-{_markdown_table(["check", "result", "detail"], check_rows)}
+{checks}
 
 ## Coverage by season
 
@@ -206,7 +110,9 @@ mistakes for coaching philosophy.
 """
 
 
-def write_report(connection: duckdb.DuckDBPyConnection, output: Path) -> Path:
+def write_report(
+    connection: duckdb.DuckDBPyConnection, tests: Sequence[TestResult] | None, output: Path
+) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_report(connection), encoding="utf-8")
+    output.write_text(render_report(connection, tests), encoding="utf-8")
     return output

@@ -18,7 +18,7 @@ from fourthdown.agent.assistant import Assistant
 from fourthdown.agent.router import HybridRouter, KeywordRouter, LLMRouter
 from fourthdown.agent.tools import Tool
 from fourthdown.config import Paths, data_paths
-from fourthdown.data import audit, etl, ingest, provenance, warehouse
+from fourthdown.data import audit, etl, ingest, modeling, provenance, warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness, scorecard, suites
 from fourthdown.llm import LLMError, default_client
 from fourthdown.models import fourth_down, registry, tracking, winprob
@@ -144,11 +144,38 @@ def warehouse_cmd(
     data_dir: DataDir = None,
     verbose: Verbose = False,
 ) -> None:
-    """Create the DuckDB semantic layer over the processed partitions."""
+    """Build the warehouse with dbt (models and data tests) over the processed partitions."""
     _configure_logging(verbose)
     paths = data_paths(data_dir)
-    target = warehouse.build(paths)
+    target = _build_warehouse(paths)
     typer.echo(f"warehouse ready at {target} ({', '.join(warehouse.VIEW_NAMES)})")
+
+
+def _build_warehouse(paths: Paths) -> Path:
+    """`warehouse.build`, turning a failed model or data test into a clean exit."""
+    try:
+        return warehouse.build(paths)
+    except modeling.DbtError as error:
+        typer.echo(f"{error}\nThe live warehouse was left as it was.", err=True)
+        raise typer.Exit(code=1) from error
+
+
+@app.command(
+    "dbt",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def dbt_cmd(ctx: typer.Context, data_dir: DataDir = None) -> None:
+    """Run any dbt command against this data root, e.g. `fourthdown dbt docs generate`.
+
+    dbt writes to the live warehouse file, so stop the warehouse service before `dbt run`;
+    `docs generate`, `ls`, and `compile` only read it. Artifacts (the docs site, the
+    manifest) land in data/warehouse/dbt/target.
+    """
+    if not ctx.args:
+        typer.echo("usage: fourthdown dbt <dbt command> [options]", err=True)
+        raise typer.Exit(code=2)
+    result = modeling.invoke(data_paths(data_dir), ctx.args)
+    raise typer.Exit(code=0 if result.success else 1)
 
 
 @app.command("audit")
@@ -160,12 +187,16 @@ def audit_cmd(
     """Write the coverage and sanity-check report, failing if any check fails."""
     _configure_logging(verbose)
     paths = data_paths(data_dir)
+    tests = modeling.load_test_results(paths)
     with warehouse.connect(paths) as connection:
-        audit.write_report(connection, output)
-        failures = [check for check in audit.run_checks(connection) if not check.passed]
+        audit.write_report(connection, tests, output)
     typer.echo(f"audit written to {output}")
+    if tests is None:
+        typer.echo("no data test results; rebuild with `fourthdown warehouse`", err=True)
+        raise typer.Exit(code=1)
+    failures = [test for test in tests if not test.passed]
     for failure in failures:
-        typer.echo(f"FAIL {failure.name}: {failure.detail}", err=True)
+        typer.echo(f"FAIL {failure.name}: {failure.message}", err=True)
     if failures:
         raise typer.Exit(code=1)
 
@@ -926,7 +957,7 @@ def build(
     list(ingest.download_seasons(wanted, paths))
     ingest.download_players(paths)
     list(etl.transform_seasons(wanted, paths))
-    target = warehouse.build(paths)
+    target = _build_warehouse(paths)
     typer.echo(f"built {len(wanted)} seasons into {target}")
 
 

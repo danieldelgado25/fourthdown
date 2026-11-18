@@ -1,0 +1,15 @@
+# Paths come from the environment, which fourthdown.data.modeling sets before every dbt
+# invocation (`fourthdown dbt ...` wraps the dbt CLI the same way), so one profile serves
+# the laptop, the container's /data volume, and pytest's temporary directories.
+fourthdown:
+  target: "{{ env_var('FOURTHDOWN_DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('FOURTHDOWN_DBT_DATABASE') }}"
+      schema: main
+      threads: 4
+      settings:
+        # The staging views read Parquet by a path relative to the data root, so the
+        # database keeps working when the root is mounted somewhere else.
+        file_search_path: "{{ env_var('FOURTHDOWN_DATA_DIR') }}"

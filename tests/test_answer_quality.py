@@ -10,15 +10,14 @@
 
 from __future__ import annotations
 
-import duckdb
 import polars as pl
 import pytest
-from conftest import ScriptedClient
+from conftest import ScriptedClient, open_warehouse
 
 from fourthdown.agent import parse
 from fourthdown.agent.parse import is_postseason, parse_seasons, parse_teams, parse_week
 from fourthdown.agent.router import KeywordRouter
-from fourthdown.data import etl, warehouse
+from fourthdown.data import etl
 from fourthdown.rag import text_to_sql
 from fourthdown.rag.text_to_sql import TextToSQL, mentioned_seasons
 from fourthdown.retrieval.store import Hit
@@ -53,8 +52,7 @@ def receivers(raw_frame, tmp_paths):
     ]
     pl.concat(rows, how="vertical_relaxed").write_parquet(tmp_paths.season_raw(2023))
     etl.transform_season(2023, tmp_paths)
-    with duckdb.connect(":memory:") as connection:
-        warehouse.create_views(connection, tmp_paths)
+    with open_warehouse(tmp_paths) as connection:
         yield connection
 
 
@@ -309,8 +307,7 @@ def playoffs(raw_frame, tmp_paths):
         )
         frame.write_parquet(tmp_paths.season_raw(season))
         etl.transform_season(season, tmp_paths)
-    with duckdb.connect(":memory:") as connection:
-        warehouse.create_views(connection, tmp_paths)
+    with open_warehouse(tmp_paths) as connection:
         yield connection
 
 

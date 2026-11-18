@@ -1,0 +1,22 @@
+version: 2
+
+seeds:
+  - name: teams
+    description: >
+      The 32 clubs under the abbreviations nflverse normalises every season to (LV for the
+      Raiders in 2009 too), with their current conference and division. Alignment has not
+      changed since 2002, so one row per club covers every season in the warehouse.
+    config:
+      column_types:
+        team: varchar
+        team_name: varchar
+        conference: varchar
+        division: varchar
+    columns:
+      - name: team
+        data_tests: [unique, not_null]
+      - name: conference
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [AFC, NFC]

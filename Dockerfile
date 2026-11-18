@@ -27,6 +27,10 @@ RUN useradd --system --uid 10001 --create-home app && mkdir /data && chown app /
 COPY docker/constraints.txt /tmp/constraints.txt
 COPY pyproject.toml README.md ./
 COPY src ./src
+# The dbt project that builds the warehouse; read by the pipeline image (and by
+# `fourthdown lineage --verify`), a few kilobytes in the others.
+COPY dbt_project ./dbt_project
+ENV FOURTHDOWN_DBT_PROJECT=/app/dbt_project
 
 FROM python AS torch
 # CPU torch first; the default wheel drags in CUDA.

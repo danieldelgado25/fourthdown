@@ -1,7 +1,7 @@
 """Static validation of model-generated SQL before it reaches DuckDB.
 
 The threat here is not a malicious user — it is a language model that will cheerfully
-write ``DROP TABLE``, invent a ``player_season`` view, or ask for 768,085 rows. Parsing
+write ``DROP TABLE``, invent a ``player_season`` view, or ask for 816,856 rows. Parsing
 with sqlglot rather than pattern-matching strings means the checks see the same structure
 DuckDB will: a comment cannot hide a second statement, and ``deleteme`` is not a DELETE.
 

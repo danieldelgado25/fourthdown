@@ -29,7 +29,13 @@ models = [
     "pyarrow>=15.0",
 ]
 # The `fourthdown` CLI: ingest, ETL, indexing, training, evaluation.
-pipeline = ["fourthdown[warehouse,retrieval,models]", "typer>=0.12", "mlflow>=3.15,<4"]
+# dbt builds the warehouse (dbt_project/); the warehouse service only reads what it built.
+pipeline = [
+    "fourthdown[warehouse,retrieval,models]",
+    "typer>=0.12",
+    "mlflow>=3.15,<4",
+    "dbt-duckdb>=1.11,<2",
+]
 dev = [
     "fourthdown[pipeline]",
     "pytest>=8.0",

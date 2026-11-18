@@ -1,0 +1,41 @@
+name: fourthdown
+version: "1.0.0"
+config-version: 2
+profile: fourthdown
+
+# The Polars ETL (fourthdown.data.etl) writes one processed Parquet partition per season;
+# everything from there to the tables the services query is this project:
+#
+#   staging   views over the Parquet, one per source, nothing renamed
+#   core      the star schema: fact_plays and the game, team, player, and season dims
+#   marts     aggregates built for one consumer (the dashboard's tendency panel)
+#   semantic  the six names text-to-SQL is prompted with (plays, games, ...), rebuilt
+#             from the star schema so the prompt, the guard, and the golden sets are
+#             unchanged by the remodel
+model-paths: ["models"]
+macro-paths: ["macros"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+clean-targets: []
+
+flags:
+  send_anonymous_usage_stats: false
+
+models:
+  fourthdown:
+    staging:
+      +schema: staging
+      +materialized: view
+    core:
+      +schema: core
+      +materialized: table
+    marts:
+      +schema: marts
+      +materialized: table
+    semantic:
+      # The target schema itself (main): the only schema the SQL guard lets a query read.
+      +materialized: table
+
+seeds:
+  fourthdown:
+    +schema: core

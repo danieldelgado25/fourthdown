@@ -65,10 +65,24 @@ jobs:
       - name: Install CPU torch (the default wheel drags in CUDA)
         run: pip install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[dev]"
-      - name: Build one season end to end
+      - name: Build one season end to end (ingest, Polars ETL, dbt build with data tests)
         run: fourthdown build --seasons 2024
       - run: pytest -m slow
-      - run: fourthdown audit
+      - name: Audit report from the dbt test results
+        run: fourthdown audit --output eval/data_audit.md
+      - name: dbt docs (model documentation and lineage graph)
+        run: fourthdown dbt docs generate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dbt-docs
+          path: |
+            data/warehouse/dbt/target/index.html
+            data/warehouse/dbt/target/manifest.json
+            data/warehouse/dbt/target/catalog.json
+            data/warehouse/dbt/target/run_results.json
+            eval/data_audit.md
+          if-no-files-found: ignore
 
   eval:
     runs-on: ubuntu-latest

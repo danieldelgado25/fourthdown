@@ -42,19 +42,17 @@ from fourthdown.services.common import (
 NAME = "warehouse"
 PORT = 8001
 
+# The dbt mart aggregates every team-season once at build time (dbt_project/models/marts).
 TENDENCY_SQL = """
 SELECT
-    posteam AS team,
-    count(*) AS plays,
-    round(avg(is_pass_call::INT), 3) AS pass_rate,
-    round(avg(CASE WHEN down IN (1, 2) THEN is_pass_call::INT END), 3) AS early_down_pass_rate,
-    round(avg(epa), 3) AS epa_per_play
-FROM plays
-WHERE season = ? AND is_designed_play AND is_neutral_script
-  AND (? IS NULL OR posteam = ?)
-GROUP BY posteam
-HAVING count(*) >= 50
-ORDER BY pass_rate DESC
+    team,
+    neutral_plays AS plays,
+    round(neutral_pass_rate, 3) AS pass_rate,
+    round(neutral_early_down_pass_rate, 3) AS early_down_pass_rate,
+    round(neutral_epa_per_play, 3) AS epa_per_play
+FROM marts.mart_team_season_tendencies
+WHERE season = ? AND (? IS NULL OR team = ?) AND neutral_plays >= 50
+ORDER BY pass_rate DESC, team
 """
 
 

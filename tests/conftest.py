@@ -184,11 +184,29 @@ def project_paths() -> Paths:
     return data_paths()
 
 
+def open_warehouse(paths: Paths) -> duckdb.DuckDBPyConnection:
+    """Build the warehouse with dbt over what is on ``paths`` (no data tests: a synthetic
+    season cannot pass league-wide ones), and open it read-only."""
+    warehouse.build(paths, run_tests=False)
+    return warehouse.connect(paths)
+
+
+@pytest.fixture(scope="session")
+def synthetic_paths(tmp_path_factory) -> Paths:
+    """A data root holding the synthetic season and its dbt-built warehouse.
+
+    Built once per session: a dbt build takes seconds, and the tests only read it.
+    """
+    paths = data_paths(tmp_path_factory.mktemp("synthetic"))
+    paths.ensure()
+    _raw_frame().write_parquet(paths.season_raw(2023))
+    etl.transform_season(2023, paths)
+    warehouse.build(paths, run_tests=False)
+    return paths
+
+
 @pytest.fixture()
-def views_connection(raw_frame, tmp_paths):
-    """The semantic views over the synthetic season, in memory."""
-    raw_frame.write_parquet(tmp_paths.season_raw(2023))
-    etl.transform_season(2023, tmp_paths)
-    with duckdb.connect(":memory:") as connection:
-        warehouse.create_views(connection, tmp_paths)
+def views_connection(synthetic_paths):
+    """The semantic tables over the synthetic season, read-only."""
+    with warehouse.connect(synthetic_paths) as connection:
         yield connection

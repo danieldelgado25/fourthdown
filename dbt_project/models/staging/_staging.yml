@@ -1,0 +1,20 @@
+version: 2
+
+models:
+  - name: stg_plays
+    description: Every processed play, keyed by play_key (game_id and play_id).
+    columns:
+      - name: play_key
+        data_tests: [unique, not_null]
+      - name: game_id
+        data_tests: [not_null]
+      - name: play_id
+        data_tests: [not_null]
+      - name: season
+        data_tests: [not_null]
+
+  - name: stg_players
+    description: nflverse player ids with full names and positions.
+    columns:
+      - name: player_id
+        data_tests: [unique, not_null]

@@ -6,7 +6,8 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 07 complete** — ingestion, ETL, the DuckDB semantic layer, guarded
+**Status: phase 08 complete** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
+dbt (a star schema under the semantic layer, with data tests that gate every build), guarded
 text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
 models (win probability, the fourth-down advisor, run/pass play call), a tool-routing
 gateway with a React dashboard over four independently deployable services, gated
@@ -23,7 +24,8 @@ day. How it runs is under [The live deployment](#the-live-deployment).
 ```bash
 make install                 # venv + editable install with dev extras
 make build                   # download 2009-2025, transform, build the warehouse (~10 min, ~1.5 GB)
-make audit                   # regenerate docs/data_audit.md
+make audit                   # regenerate docs/data_audit.md from the dbt test results
+make dbt-docs                # dbt model docs and lineage graph on http://localhost:8081
 ```
 
 Then query it directly:
@@ -44,6 +46,42 @@ LIMIT 5;
 
 A single season is enough to develop against: `make build SEASONS=2024`.
 
+## The warehouse (dbt)
+
+The Polars ETL writes one Parquet partition per season. [`dbt_project/`](dbt_project/)
+turns those partitions into the warehouse:
+
+| layer | schema | models |
+| --- | --- | --- |
+| staging | `staging` | `stg_plays`, `stg_players`: views over the Parquet |
+| core | `core` | `fact_plays` (one row per play) with `dim_game`, `dim_team`, `dim_player`, `dim_season` |
+| marts | `marts` | `mart_team_season_tendencies`: pass rate, PROE, EPA, success, and 4th-down go rate per team-season, read by the dashboard |
+| semantic | `main` | `plays`, `games`, `drives`, `team_game`, `player_game`, `players`: what text-to-SQL is prompted with |
+
+The semantic layer keeps the names and columns the text-to-SQL prompt and golden sets
+were written against, rebuilt on top of the star schema. Before switching, the remodel was
+checked to reproduce all six relations row for row on 2009-2025. 64 dbt tests run on every
+build: grain uniqueness, `relationships` from every fact key to its dimension,
+`accepted_values` on every label, and custom generic tests for ranges and league-wide
+distributions. A build that fails one is never swapped in for the live warehouse.
+
+```bash
+fourthdown warehouse                          # dbt build: seeds, models, data tests
+fourthdown dbt test --select fact_plays       # any dbt command, pointed at data/
+fourthdown dbt docs generate                  # docs + lineage graph (CI uploads them)
+```
+
+```sql
+-- The same tendency question against the mart:
+SELECT team, round(neutral_pass_rate, 3) AS pass_rate, round(pass_rate_over_expected, 1) AS proe
+FROM marts.mart_team_season_tendencies
+WHERE season = 2024
+ORDER BY neutral_pass_rate DESC
+LIMIT 5;
+```
+
+The design reasoning is in [docs/architecture.md](docs/architecture.md#the-warehouse-is-a-dbt-project-phase-08).
+
 ## Asking questions
 
 Text-to-SQL runs against a local [Ollama](https://ollama.com) model
@@ -58,7 +96,7 @@ fourthdown eval --holdout -o docs/text_to_sql_holdout_eval.md   # score the held
 ```
 
 Every generated query is parsed with sqlglot before it reaches DuckDB: one read-only
-SELECT, only the five semantic views, no filesystem functions, and a `LIMIT` is imposed.
+SELECT, only the six semantic tables, no filesystem functions, and a `LIMIT` is imposed.
 Rejections and DuckDB errors are fed back to the model for a bounded number of repairs.
 Accuracy is measured by executing the golden questions and comparing results with
 handwritten reference SQL, not by matching query text. The prompt was tuned on a
@@ -170,7 +208,7 @@ make wp-image && make wp-run     # the win-probability model on http://127.0.0.1
 ```
 
 Every build step hashes what it writes. The raw nflverse files, the processed partitions,
-and the SQL of each view all go into `data/manifest.json`, together with the source URL
+and the dbt models that build the warehouse all go into `data/manifest.json`, together with the source URL
 and the raw file each partition came from. They fold into one `data_version`. Every
 training run logs that version, the season split, every hyperparameter, the metrics, and
 the loss curve to MLflow, and writes a model card next to the weights. The container
@@ -277,9 +315,8 @@ finishes. `make pipeline` is a no-op when `data/` already holds a verified build
 same `FOURTHDOWN_SEASONS` and `FOURTHDOWN_TRAIN_ARGS`. Without Docker, run each service
 with `make serve-warehouse`, `serve-retrieval`, `serve-models`, and `serve-gateway`.
 
-The warehouse stores its Parquet glob relative to the data root, so the same
-`fourthdown.duckdb` opens on the host and at `/data` in a container. Warehouses built
-before that change need one `fourthdown warehouse` to pick it up.
+The warehouse's staging views read Parquet by a path relative to the data root, so
+the same `fourthdown.duckdb` opens on the host and at `/data` in a container.
 
 ### Deploying to a server
 
@@ -317,8 +354,8 @@ The first run hands `./data` to uid 10001, the user every image runs as (the
 `data-owner` step), then builds the warehouse and trains in place. The index covers
 `FOURTHDOWN_INDEX_SEASONS` (default 2009-2025). The index step embeds only seasons not
 yet in the index (`--missing-only`), so rerunning that line after widening it is cheap.
-Updating is the last line again; when a release changes the views, run the first line
-too (with the app stopped), since the pipeline redefines them even when the data is current. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
+Updating is the last line again; when a release changes the dbt models, run the first
+line too (with the app stopped), since the pipeline rebuilds them even when the data is current. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
 a release, which is also how you roll back.
 
 The warehouse service writes its miss log to `./data/feedback`, the one writable mount in
@@ -429,15 +466,16 @@ The scorecard is published to the job summary. Text-to-SQL and LLM routing run i
 
 ```
 src/fourthdown/
-  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build
+  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt
   config.py           path resolution (override the data root with FOURTHDOWN_DATA_DIR)
   data/
     ingest.py         nflverse release downloader, incremental and resumable
     provenance.py     per-file SHA-256, table lineage, data_version, drift checks
     schema.py         the processed column contract, including the leakage list
     etl.py            lazy Polars pipeline -> season-partitioned Parquet
-    warehouse.py      DuckDB views: plays, games, drives, team_game, player_game, players
-    audit.py          validation checks + the generated audit report
+    modeling.py       runs dbt in-process against a data root; collects test results
+    warehouse.py      builds the warehouse with dbt and swaps it in; read-only connections
+    audit.py          coverage tables + the last build's dbt test results
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
   sql/filters.py      rerun an empty query with each WHERE condition removed
   feedback.py         the miss log: one JSON line per empty result
@@ -488,6 +526,14 @@ src/fourthdown/
     warehouse.py      stats and tendency tools over DuckDB
     retrieval.py      the narrative tool over pgvector
     models.py         the advisor tool and /advise over the trained models
+dbt_project/
+  models/staging/     views over the processed Parquet and the players file
+  models/core/        fact_plays and the game, team, player, and season dimensions
+  models/marts/       mart_team_season_tendencies
+  models/semantic/    the six tables text-to-SQL queries, built from the star schema
+  macros/tests/       generic data tests: ranges, means in a band, null-rate ceilings
+  tests/              singular data tests: 32 teams, full seasons, lossless game split
+  seeds/teams.csv     the 32 clubs with conference and division
 web/
   src/api.ts          the typed wire format
   src/App.tsx         readiness bar and the three panels
@@ -495,7 +541,7 @@ web/
 docs/
   architecture.md     system design and phase status
   data_dictionary.md  grain, derived columns, leakage, data quirks
-  data_audit.md       generated: per-season coverage and check results
+  data_audit.md       generated: per-season coverage and dbt test results
   text_to_sql_eval.md generated: golden-set score and per-question failures
   retrieval_eval.md   generated: retrieval metrics per mode
   model_eval.md       generated: held-out model metrics, calibration, predictability
@@ -521,8 +567,8 @@ projects ~90 of 372 columns, normalises types, and derives the situational featu
 [docs/data_dictionary.md](docs/data_dictionary.md).
 
 Every derived aggregate excludes kneels, spikes, aborted snaps, and special teams, so
-`is_pass_call` is a real pre-snap decision and not an artifact of clock management. The
-audit asserts that against published league rates on every build.
+`is_pass_call` is a real pre-snap decision and not an artifact of clock management. A dbt
+test asserts that against published league rates on every build.
 
 Data is gitignored. `make build` reproduces it.
 

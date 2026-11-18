@@ -1,0 +1,211 @@
+version: 2
+
+models:
+  - name: fact_plays
+    description: >
+      One row per play. Situation (down, distance, field position, clock, score), outcome
+      (yards, touchdowns, turnovers, conversions), nflfastR's model outputs (EPA, win
+      probability, CPOE, expected pass rate), and the ETL's derived labels
+      (is_designed_play, is_pass_call, is_neutral_script, ...). Column meanings are in
+      docs/data_dictionary.md.
+    data_tests:
+      # The play-call model's label exists only on pre-snap run/pass decisions.
+      - expression_is_true:
+          arguments:
+            expression: "is_pass_call is null or is_designed_play"
+      # League-wide properties of NFL play-by-play: a broken transform or a changed
+      # upstream release shows up here before it shows up as a wrong answer.
+      - mean_between:
+          arguments:
+            expression: "cast(is_pass_call as integer)"
+            min_value: 0.52
+            max_value: 0.65
+            where: "is_designed_play"
+      - mean_between:
+          arguments:
+            expression: "epa"
+            min_value: -0.05
+            max_value: 0.05
+            where: "is_designed_play"
+    columns:
+      - name: play_key
+        description: game_id and play_id, the grain.
+        data_tests: [unique, not_null]
+      - name: game_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_game')
+                field: game_id
+      - name: play_id
+        data_tests: [not_null]
+      - name: season
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_season')
+                field: season
+      - name: posteam
+        description: The offense; null on plays with no possession (timeouts, quarter ends).
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team
+      - name: defteam
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team
+      - name: posteam_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [home, away]
+      - name: passer_player_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_player')
+                field: player_id
+      - name: rusher_player_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_player')
+                field: player_id
+      - name: receiver_player_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_player')
+                field: player_id
+      - name: qtr
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 1
+                max_value: 6
+      - name: down
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4]
+                quote: false
+      - name: yardline_100
+        data_tests:
+          - accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 100
+      - name: play_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  [pass, run, no_play, kickoff, punt, extra_point, field_goal, qb_kneel, qb_spike]
+      - name: distance_bucket
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [short, medium, long, very_long]
+      - name: field_zone
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [red_zone, opponent_territory, midfield, own_territory, backed_up]
+      - name: score_state
+        data_tests:
+          - accepted_values:
+              arguments:
+                values:
+                  - trailing_big
+                  - trailing_two_scores
+                  - trailing_one_score
+                  - tied
+                  - leading_one_score
+                  - leading_two_scores
+                  - leading_big
+      - name: posteam_won
+        description: >
+          The win-probability model's label. Null on ties, which are rare enough that a
+          null rate above 1% means a broken join or a missing result.
+        data_tests:
+          - null_rate_below:
+              arguments:
+                max_rate: 0.01
+                where: "posteam is not null"
+
+  - name: dim_game
+    description: One row per game, with the attributes nflverse repeats on every play.
+    data_tests:
+      - expression_is_true:
+          arguments:
+            expression: "season_type = 'REG' or playoff_round is not null"
+    columns:
+      - name: game_id
+        data_tests: [unique, not_null]
+      - name: season
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_season')
+                field: season
+      - name: season_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [REG, POST]
+      - name: week
+        data_tests: [not_null]
+      - name: playoff_round
+        description: wild_card, divisional, conference, or super_bowl; null in the regular season.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [wild_card, divisional, conference, super_bowl]
+      - name: home_team
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team
+      - name: away_team
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_team')
+                field: team
+      - name: home_margin
+        description: Final home score minus away score (nflverse's `result`).
+      - name: total_points
+        description: Final combined score (nflverse's `total`).
+
+  - name: dim_team
+    description: One row per club; abbreviation, name, conference, division.
+    columns:
+      - name: team
+        data_tests: [unique, not_null]
+
+  - name: dim_player
+    description: >
+      One row per player id. full_name and position come from nflverse's player table;
+      short_name is the abbreviated name the play-by-play uses.
+    columns:
+      - name: player_id
+        data_tests: [unique, not_null]
+
+  - name: dim_season
+    description: One row per season, with its schedule shape and coverage.
+    columns:
+      - name: season
+        data_tests: [unique, not_null]
+      - name: regular_season_weeks
+        description: 17 through 2020, 18 from 2021, when the season grew to 17 games.

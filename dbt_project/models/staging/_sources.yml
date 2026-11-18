@@ -1,0 +1,20 @@
+version: 2
+
+sources:
+  - name: nflverse
+    description: >
+      Files on the data root. Paths are relative to it (the profile sets DuckDB's
+      file_search_path), so a warehouse built on a laptop still reads its Parquet when the
+      same root is mounted at /data in a container.
+    tables:
+      - name: processed_plays
+        description: >
+          The processed play table, one Parquet partition per season, written by the Polars
+          ETL (fourthdown.data.etl) from nflverse's play-by-play release. Its columns are the
+          contract in fourthdown.data.schema.
+        meta:
+          external_location: "processed/plays/season=*/*.parquet"
+      - name: players
+        description: nflverse's player table, the source of full names and positions.
+        meta:
+          external_location: "raw/players.parquet"

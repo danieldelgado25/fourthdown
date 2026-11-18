@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import shutil
+
 import polars as pl
 from typer.testing import CliRunner
 
 from fourthdown.cli import app
-from fourthdown.data import etl, ingest, provenance, warehouse
+from fourthdown.data import etl, ingest, modeling, provenance, warehouse
 
 
 def _build(raw_frame, paths, season=2023):
     raw_frame.write_parquet(paths.season_raw(season))
     etl.transform_season(season, paths)
-    warehouse.build(paths)
+    warehouse.build(paths, run_tests=False)
     return provenance.load(paths)
 
 
@@ -23,11 +25,16 @@ def test_partition_records_rows_and_the_raw_file_it_came_from(raw_frame, tmp_pat
     assert partition.transform_sha256 == provenance.transform_sha256()
 
 
-def test_every_view_is_recorded_with_what_it_reads(raw_frame, tmp_paths):
+def test_every_dbt_model_is_recorded_with_what_it_reads(raw_frame, tmp_paths):
     manifest = _build(raw_frame, tmp_paths)
-    assert set(manifest.views) == set(warehouse.VIEW_NAMES)
-    assert manifest.views["plays"].reads == (provenance.PROCESSED_SOURCE,)
-    assert manifest.views["drives"].reads == ("plays",)
+    assert set(warehouse.VIEW_NAMES) <= set(manifest.models)
+    assert {"fact_plays", "dim_game", "dim_team", "dim_player", "dim_season"} <= set(
+        manifest.models
+    )
+    assert manifest.models["stg_plays"].reads == ("nflverse.processed_plays",)
+    assert manifest.models["drives"].reads == ("dim_game", "fact_plays")
+    assert manifest.models["fact_plays"].schema == "core"
+    assert manifest.project_sha256 == modeling.project_sha256()
 
 
 def test_data_version_is_stable_across_rebuilds_of_the_same_bytes(raw_frame, tmp_paths):
@@ -47,7 +54,7 @@ def test_manifest_round_trips_through_json(raw_frame, tmp_paths):
     manifest = _build(raw_frame, tmp_paths)
     again = provenance.Manifest.from_json(manifest.to_json())
     assert again.processed == manifest.processed
-    assert again.views == manifest.views
+    assert again.models == manifest.models
     assert again.data_version == manifest.data_version
 
 
@@ -77,20 +84,29 @@ def test_verify_catches_an_edited_partition(raw_frame, tmp_paths):
     assert any("changed since" in problem for problem in provenance.verify(tmp_paths))
 
 
-def test_verify_catches_a_view_whose_sql_changed(raw_frame, tmp_paths, monkeypatch):
-    # A pipeline that only checks data files would keep serving the old view.
+def test_verify_catches_a_model_whose_sql_changed(raw_frame, tmp_paths, tmp_path, monkeypatch):
+    # A pipeline that only checks data files would keep serving the old tables.
+    project = tmp_path / "dbt_project"
+    shutil.copytree(modeling.project_dir(), project)
+    monkeypatch.setenv(modeling.PROJECT_ENV, str(project))
     _build(raw_frame, tmp_paths)
-    edited = {**warehouse.VIEW_SQL, "games": warehouse.VIEW_SQL["games"] + " -- edited"}
-    monkeypatch.setattr(warehouse, "VIEW_SQL", edited)
-    assert provenance.verify(tmp_paths) == ["view games: SQL changed since; rerun warehouse"]
+    games = project / "models" / "semantic" / "games.sql"
+    games.write_text(games.read_text() + "-- edited\n")
+    assert provenance.verify(tmp_paths) == [
+        "model games: models/semantic/games.sql changed since; rerun warehouse"
+    ]
+    (project / "macros" / "generic_tests_extra.sql").write_text("-- new macro\n")
+    assert any(problem.startswith("dbt project:") for problem in provenance.verify(tmp_paths))
 
 
 def test_verify_catches_a_players_file_that_arrived_or_changed(raw_frame, tmp_paths):
     _build(raw_frame, tmp_paths)
     players = pl.DataFrame({"gsis_id": ["X"], "display_name": ["A B"], "position": ["QB"]})
     players.write_parquet(tmp_paths.players)
-    assert provenance.verify(tmp_paths) == ["view players: SQL changed since; rerun warehouse"]
-    warehouse.build(tmp_paths)
+    assert provenance.verify(tmp_paths) == [
+        "players: file arrived since the warehouse was built; rerun warehouse"
+    ]
+    warehouse.build(tmp_paths, run_tests=False)
     assert provenance.verify(tmp_paths) == []
     players.with_columns(display_name=pl.lit("C D")).write_parquet(tmp_paths.players)
     assert any(problem.startswith("players:") for problem in provenance.verify(tmp_paths))
@@ -135,7 +151,7 @@ def test_ingest_records_headers_of_a_fresh_download(tmp_paths, monkeypatch):
     assert record.bytes == len(b"season bytes")
 
 
-def test_render_lists_views_partitions_and_sources(raw_frame, tmp_paths):
+def test_render_lists_models_partitions_and_sources(raw_frame, tmp_paths):
     manifest = _build(raw_frame, tmp_paths)
     text = provenance.render(manifest)
     assert manifest.data_version in text

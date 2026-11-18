@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from fourthdown.data import audit, warehouse
+from fourthdown.data import modeling, warehouse
 
 pytestmark = pytest.mark.slow
 
@@ -22,9 +22,22 @@ def connection(project_paths):
         yield connection
 
 
-def test_all_audit_checks_pass(connection):
-    failures = [check for check in audit.run_checks(connection) if not check.passed]
-    assert not failures, "; ".join(f"{check.name}: {check.detail}" for check in failures)
+def test_the_last_build_ran_and_passed_every_data_test(project_paths, connection):
+    tests = modeling.load_test_results(project_paths)
+    assert tests, "the warehouse was built without its dbt data tests"
+    failures = [test for test in tests if not test.passed]
+    assert not failures, "; ".join(f"{test.name}: {test.message}" for test in failures)
+
+
+def test_semantic_plays_reassembles_every_processed_play(project_paths, connection):
+    # The star schema split must be lossless: plays (fact_plays joined back to dim_game)
+    # holds exactly the processed rows.
+    glob = (project_paths.processed / "season=*" / "*.parquet").as_posix()
+    differences = connection.execute(
+        f"SELECT count(*) FROM (SELECT * FROM read_parquet('{glob}') "
+        "EXCEPT ALL SELECT * FROM plays)"
+    ).fetchone()
+    assert differences == (0,)
 
 
 def test_season_play_counts_are_plausible(connection):

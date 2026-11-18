@@ -21,7 +21,7 @@ TARGETS = $(SERVICES) pipeline
 # Credentials from .env reach helm as shell variables, so make echoes their names, not their values.
 export POSTGRES_PASSWORD FOURTHDOWN_LLM_BASE_URL FOURTHDOWN_LLM_MODEL FOURTHDOWN_LLM_API_KEY
 
-.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	eval-routing scorecard scorecard-ci lineage verify-data mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
+.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -58,6 +58,11 @@ train:
 
 lineage:
 	fourthdown lineage --output docs/lineage.md
+
+# The dbt lineage graph and model docs (dbt_project/), served on http://localhost:8081.
+dbt-docs:
+	fourthdown dbt docs generate
+	fourthdown dbt docs serve --port 8081 --no-browser
 
 verify-data:
 	fourthdown lineage --verify --output docs/lineage.md

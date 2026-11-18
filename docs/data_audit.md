@@ -1,20 +1,77 @@
 # Data audit
 
-Generated 2026-09-22 18:47 UTC by `fourthdown audit`. Source: nflverse play-by-play releases.
+Generated 2026-11-17 23:35 UTC by `fourthdown audit`. Source: nflverse play-by-play releases.
 
-## Checks
+## Data tests
 
-| check | result | detail |
+64 of 64 dbt data tests passed on the last warehouse build (`dbt build` in `fourthdown warehouse`), failures first.
+
+| test | result | detail |
 | --- | --- | --- |
-| unique play keys | pass | 0 duplicated (game_id, play_id) |
-| 32 teams per season | pass | max distinct posteam = 32 |
-| full regular seasons | pass | fewest regular season games in a season = 256 |
-| league pass rate in [0.52, 0.65] | pass | pass rate = 0.6169 |
-| EPA per play near zero | pass | mean EPA = 0.0089 |
-| downs within 1-4 | pass | 0 out-of-range downs |
-| yardline_100 within 0-100 | pass | 0 out-of-range yardlines |
-| play-call label only on designed plays | pass | 0 labelled non-designed plays |
-| win label present (ties excepted) | pass | null rate = 0.0034 |
+| accepted_range fact_plays.qtr | pass | 0 failing rows |
+| accepted_range fact_plays.yardline_100 | pass | 0 failing rows |
+| accepted_range mart_team_season_tendencies.fourth_down_go_rate | pass | 0 failing rows |
+| accepted_range mart_team_season_tendencies.neutral_pass_rate | pass | 0 failing rows |
+| accepted_range mart_team_season_tendencies.pass_rate | pass | 0 failing rows |
+| accepted_values dim_game.playoff_round | pass | 0 failing rows |
+| accepted_values dim_game.season_type | pass | 0 failing rows |
+| accepted_values fact_plays.distance_bucket | pass | 0 failing rows |
+| accepted_values fact_plays.down | pass | 0 failing rows |
+| accepted_values fact_plays.field_zone | pass | 0 failing rows |
+| accepted_values fact_plays.play_type | pass | 0 failing rows |
+| accepted_values fact_plays.posteam_type | pass | 0 failing rows |
+| accepted_values fact_plays.score_state | pass | 0 failing rows |
+| accepted_values teams.conference | pass | 0 failing rows |
+| every season has 32 teams | pass | 0 failing rows |
+| expression_is_true dim_game (season_type = 'REG' or playoff_round is not null) | pass | 0 failing rows |
+| expression_is_true fact_plays (is_pass_call is null or is_designed_play) | pass | 0 failing rows |
+| finished seasons have full regular seasons | pass | 0 failing rows |
+| game attributes are constant within a game | pass | 0 failing rows |
+| mean_between fact_plays (cast(is_pass_call as integer)) | pass | 0 failing rows |
+| mean_between fact_plays (epa) | pass | 0 failing rows |
+| not_null dim_game.away_team | pass | 0 failing rows |
+| not_null dim_game.game_id | pass | 0 failing rows |
+| not_null dim_game.home_team | pass | 0 failing rows |
+| not_null dim_game.season | pass | 0 failing rows |
+| not_null dim_game.season_type | pass | 0 failing rows |
+| not_null dim_game.week | pass | 0 failing rows |
+| not_null dim_player.player_id | pass | 0 failing rows |
+| not_null dim_season.season | pass | 0 failing rows |
+| not_null dim_team.team | pass | 0 failing rows |
+| not_null fact_plays.game_id | pass | 0 failing rows |
+| not_null fact_plays.play_id | pass | 0 failing rows |
+| not_null fact_plays.play_key | pass | 0 failing rows |
+| not_null fact_plays.season | pass | 0 failing rows |
+| not_null mart_team_season_tendencies.season | pass | 0 failing rows |
+| not_null mart_team_season_tendencies.team | pass | 0 failing rows |
+| not_null stg_players.player_id | pass | 0 failing rows |
+| not_null stg_plays.game_id | pass | 0 failing rows |
+| not_null stg_plays.play_id | pass | 0 failing rows |
+| not_null stg_plays.play_key | pass | 0 failing rows |
+| not_null stg_plays.season | pass | 0 failing rows |
+| not_null teams.team | pass | 0 failing rows |
+| null_rate_below fact_plays.posteam_won | pass | 0 failing rows |
+| regular season weeks match the schedule | pass | 0 failing rows |
+| relationships dim_game.away_team | pass | 0 failing rows |
+| relationships dim_game.home_team | pass | 0 failing rows |
+| relationships dim_game.season | pass | 0 failing rows |
+| relationships fact_plays.defteam | pass | 0 failing rows |
+| relationships fact_plays.game_id | pass | 0 failing rows |
+| relationships fact_plays.passer_player_id | pass | 0 failing rows |
+| relationships fact_plays.posteam | pass | 0 failing rows |
+| relationships fact_plays.receiver_player_id | pass | 0 failing rows |
+| relationships fact_plays.rusher_player_id | pass | 0 failing rows |
+| relationships fact_plays.season | pass | 0 failing rows |
+| relationships mart_team_season_tendencies.team | pass | 0 failing rows |
+| unique dim_game.game_id | pass | 0 failing rows |
+| unique dim_player.player_id | pass | 0 failing rows |
+| unique dim_season.season | pass | 0 failing rows |
+| unique dim_team.team | pass | 0 failing rows |
+| unique fact_plays.play_key | pass | 0 failing rows |
+| unique stg_players.player_id | pass | 0 failing rows |
+| unique stg_plays.play_key | pass | 0 failing rows |
+| unique teams.team | pass | 0 failing rows |
+| unique_combination_of_columns mart_team_season_tendencies | pass | 0 failing rows |
 
 ## Coverage by season
 
@@ -36,6 +93,7 @@ Generated 2026-09-22 18:47 UTC by `fourthdown audit`. Source: nflverse play-by-p
 | 2022 | 284 | 49434 | 36616 | 0.6105 | 0.5779 | 0.0076 | 0.0115 | 0.0057 | 0.0 |
 | 2023 | 285 | 49665 | 36810 | 0.6217 | 0.5973 | -0.0107 | 0.0115 | 0.0057 | 0.0 |
 | 2024 | 285 | 49492 | 36454 | 0.612 | 0.5798 | 0.0233 | 0.0115 | 0.0058 | 0.0 |
+| 2025 | 285 | 48771 | 35928 | 0.6113 | 0.5796 | 0.0185 | 0.0117 | 0.0058 | 0.0 |
 
 `pass_rate` counts designed run/pass plays only (kneels, spikes, aborted snaps, and
 special teams excluded). `neutral_pass_rate` further restricts to neutral game script:
@@ -47,13 +105,13 @@ mistakes for coaching philosophy.
 
 | play_type | plays | share |
 | --- | --- | --- |
-| pass | 319614 | 0.4161 |
-| run | 226742 | 0.2952 |
-| no_play | 71470 | 0.093 |
-| kickoff | 44240 | 0.0576 |
-| punt | 38379 | 0.05 |
-| (null) | 22645 | 0.0295 |
-| extra_point | 20467 | 0.0266 |
-| field_goal | 16755 | 0.0218 |
-| qb_kneel | 6595 | 0.0086 |
-| qb_spike | 1178 | 0.0015 |
+| pass | 339351 | 0.4154 |
+| run | 241637 | 0.2958 |
+| no_play | 76193 | 0.0933 |
+| kickoff | 47167 | 0.0577 |
+| punt | 40421 | 0.0495 |
+| (null) | 24090 | 0.0295 |
+| extra_point | 21797 | 0.0267 |
+| field_goal | 17895 | 0.0219 |
+| qb_kneel | 7047 | 0.0086 |
+| qb_spike | 1258 | 0.0015 |
