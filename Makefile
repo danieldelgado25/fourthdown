@@ -103,7 +103,7 @@ images:
 constraints:
 	{ echo "# Runtime pins for the Dockerfile: the versions the test suite ran against."; \
 	  echo "# torch is installed separately from the CPU wheel index; regenerate with \`make constraints\`."; \
-	  pip freeze --exclude-editable | grep -Eiv '^(fourthdown|torch|pytest|ruff|mypy|mypy[-_]extensions|types-|pluggy|iniconfig|pathspec|librt|ast[-_]serialize)\b'; \
+	  pip freeze --exclude-editable | grep -Eiv '^(fourthdown|torch|pytest|ruff|mypy|types-|pluggy|iniconfig|pathspec|librt|ast[-_]serialize)\b'; \
 	} > docker/constraints.txt
 
 # Every service in Docker; the dashboard is on http://localhost:8000.

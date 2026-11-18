@@ -6,10 +6,12 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 09 complete** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
+**Status: phase 10 complete** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
 dbt (a star schema under the semantic layer, with data tests that gate every build), all of
 it orchestrated by Dagster as an asset graph partitioned by NFL week (a weekly schedule and
-a sensor retrain when a new week lands, incrementally), guarded text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
+a sensor retrain when a new week lands, incrementally), Pandera contracts and row-count
+checks on every file that comes in, a leakage contract that blocks training, freshness
+alerts during the season, guarded text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
 models (win probability, the fourth-down advisor, run/pass play call), a tool-routing
 gateway with a React dashboard over four independently deployable services, gated
 evaluation in CI, and Docker Compose and Helm deployments. Design notes and phase history
@@ -126,6 +128,47 @@ seconds to ingest (a conditional download) and 0.1 seconds to transform (one new
 other week's bytes untouched). The incremental dbt build ran all 64 tests, and `fact_plays`
 took 2.0 seconds instead of 6.2. Retraining took 1.6 minutes and the scorecard 6 seconds. A
 rerun with nothing new took 30 seconds and skipped training.
+
+## Data quality
+
+Every file is checked before anything is built from it
+([`src/fourthdown/quality/`](src/fourthdown/quality/)), and every check reports failures the
+same way: what failed, by how much, and an example.
+
+| check | where | what it catches |
+| --- | --- | --- |
+| raw contract (Pandera) | each new nflverse file | a required column dropped, text where numbers belong (a cast would load nulls), duplicate play keys, the wrong season |
+| row counts | each week | a game with under 100 or over 300 plays, a weekly average outside 145-225 plays per game, a re-delivered week more than 5% off what was ingested |
+| processed contract (Pandera) | each weekly partition, before it is written | any column, type, range, or label outside the contract; rows from another week |
+| leakage contract | before any training | a feature that isn't declared pre-snap, an nflfastR model output used as a feature, a feature that alone predicts its target with AUC above 0.95 |
+| freshness | daily, September to February | a finished week not ingested two days after its last game; games nflverse has not posted results for |
+
+A file that fails is never used. In Dagster the checks are asset checks: a failure fails
+the run with every problem listed, and a rejected download goes to `data/raw/quarantine/`
+while the previous file stays. The leakage contract is a blocking check, so training is
+skipped. Failed runs and stale data go to the logs, the Dagster UI, and, when
+`FOURTHDOWN_ALERT_WEBHOOK` is set, a Slack or Discord channel.
+
+```bash
+fourthdown quality --seasons 2009-          # every contract against the data on disk
+```
+
+On real data, the processed contract's first pass over 2009-2025 found one value out of
+range in 816,856 plays: nflverse's timeout counter reads -1 after a third timeout in playoff
+overtime (2025 week 20, BUF at DEN). The ETL now floors it at 0
+([data dictionary](docs/data_dictionary.md#known-data-quirks)). To test the checks,
+nflverse's real 2026 file was republished with one week-10 game cut to 40 plays. The run
+failed:
+
+```
+nflverse week 2026-10 failed its data quality checks; nothing was written; the rejected
+download is in data/raw/quarantine and the previous season file is still in place:
+row_counts:
+  - 2026-10: 1 game(s) with fewer than 100 plays (2026_10_BUF_NYJ has 40); a game
+    published part-way, or a truncated file
+  - 2026-10: 2,292 plays, -5.4% against the 2,424 ingested before; a correction moves a
+    week by a handful of plays, not 5%
+```
 
 ## Asking questions
 
@@ -516,7 +559,7 @@ The scorecard is published to the job summary. Text-to-SQL and LLM routing run i
 
 ```
 src/fourthdown/
-  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt / pipeline
+  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt / pipeline / quality
   config.py           path resolution (override the data root with FOURTHDOWN_DATA_DIR)
   data/
     ingest.py         nflverse downloads (conditional on the ETag) and the schedule's complete weeks
@@ -531,6 +574,12 @@ src/fourthdown/
     automation.py     jobs, the weekly schedule, and the sensor that publishes new data
     partitions.py     NFL weeks as dynamic partitions, registered from the nflverse schedule
     run.py            `fourthdown pipeline`: the graph once, in-process (compose, Helm Job)
+  quality/
+    contracts.py      Pandera contracts for the raw nflverse file and each processed week
+    volume.py         plays per game and per week, and drift against the last ingest
+    leakage.py        the feature contract: declared pre-snap, no model outputs, no outcome proxies
+    freshness.py      the season's finished weeks against what has been ingested
+    alerts.py         failures to the log and an optional Slack/Discord webhook
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
   sql/filters.py      rerun an empty query with each WHERE condition removed
   feedback.py         the miss log: one JSON line per empty result

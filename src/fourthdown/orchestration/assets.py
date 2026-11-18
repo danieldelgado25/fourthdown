@@ -17,9 +17,11 @@ retrain, which by its nature fits on every season.
 import shutil
 import sys
 from collections.abc import Iterator, Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any
 
+import polars as pl
 from dagster import (
     AssetCheckResult,
     AssetCheckSpec,
@@ -33,12 +35,14 @@ from dagster import (
     MetadataValue,
     Output,
     asset,
+    asset_check,
 )
 from dagster_dbt import DagsterDbtTranslator, DbtCliResource, dbt_assets
 
 from fourthdown.config import Paths, data_paths, week_key
 from fourthdown.data import etl, ingest, modeling, provenance, warehouse
 from fourthdown.orchestration.partitions import WEEKS, by_season
+from fourthdown.quality import DataQualityError, alerts, contracts, freshness, leakage, volume
 
 
 class DataRoot(ConfigurableResource):  # type: ignore[type-arg]
@@ -63,50 +67,175 @@ def dbt_resource() -> DbtCliResource:
 # --- ingestion: one partition per week ----------------------------------------------------
 
 
+class IngestConfig(Config):
+    """The row-count bands (``fourthdown.quality.volume``); the defaults fit 2009-2025."""
+
+    min_plays_per_game: int = 100
+    max_plays_per_game: int = 300
+    min_week_mean: float = 145.0
+    max_week_mean: float = 225.0
+    max_redelivery_change: float = 0.05
+
+    def bands(self) -> volume.VolumeBands:
+        return volume.VolumeBands(
+            min_plays_per_game=self.min_plays_per_game,
+            max_plays_per_game=self.max_plays_per_game,
+            min_week_mean=self.min_week_mean,
+            max_week_mean=self.max_week_mean,
+            max_redelivery_change=self.max_redelivery_change,
+        )
+
+
+RAW_CHECKS = {
+    "complete_week": "Every game the nflverse schedule lists for the week is final and present.",
+    "raw_contract": "Required columns present, numeric columns numeric, unique play keys, "
+    "the right season (Pandera).",
+    "row_counts": "Plays per game and per week inside the 2009-2025 bands, and within 5% of "
+    "the last ingest of the same week.",
+}
+
+
+def _results(failures: Mapping[str, list[str]]) -> list[AssetCheckResult]:
+    return [
+        AssetCheckResult(
+            check_name=name,
+            passed=not problems,
+            metadata={
+                "problems": MetadataValue.md("\n".join(f"- {p}" for p in problems) or "none")
+            },
+        )
+        for name, problems in failures.items()
+    ]
+
+
+def _failure(subject: str, failures: Mapping[str, list[str]], note: str = "") -> Failure:
+    lines = [f"{subject} failed its data quality checks; nothing was written{note}:"]
+    for name, problems in failures.items():
+        if problems:
+            lines.append(f"{name}:")
+            lines += [f"  - {problem}" for problem in problems]
+    return Failure(description="\n".join(lines))
+
+
+def _inspect(
+    source: Path,
+    paths: Paths,
+    season: int,
+    season_weeks: list[int],
+    previous: Mapping[str, provenance.PartitionRecord],
+    bands: volume.VolumeBands,
+) -> tuple[dict[str, list[str]], int]:
+    """Run ``RAW_CHECKS`` on the requested weeks of one season file."""
+    failures: dict[str, list[str]] = {name: [] for name in RAW_CHECKS}
+    raw = pl.read_parquet(source)
+    complete = set(ingest.completed_weeks(paths, season))
+    games = 0
+    for week in season_weeks:
+        key = week_key(season, week)
+        rows = raw.filter(pl.col("week") == week) if "week" in raw.columns else raw.clear()
+        scheduled = ingest.scheduled_games(paths, season, week)
+        present = (
+            {str(game) for game in rows["game_id"].unique()} if "game_id" in rows.columns else set()
+        )
+        if not scheduled:
+            failures["complete_week"].append(f"{key}: the nflverse schedule lists no games")
+        elif week not in complete:
+            failures["complete_week"].append(
+                f"{key}: not every game of the week has a final result yet"
+            )
+        elif missing := sorted(scheduled - present):
+            failures["complete_week"].append(
+                f"{key}: the play-by-play lacks {len(missing)} of {len(scheduled)} games "
+                f"({', '.join(missing[:3])}); nflverse has not published them yet"
+            )
+        try:
+            contracts.validate_raw(rows, season=season, subject=key)
+        except DataQualityError as error:
+            failures["raw_contract"] += [f"{key}: {problem}" for problem in error.problems]
+        if "game_id" in rows.columns:
+            earlier = previous.get(key)
+            failures["row_counts"] += volume.check_week(
+                rows, key, previous_rows=earlier.rows if earlier else None, bands=bands
+            )
+        games += len(present)
+    return failures, games
+
+
 @asset(
     partitions_def=WEEKS,
     backfill_policy=BackfillPolicy.single_run(),
     group_name="ingest",
     kinds={"parquet"},
+    check_specs=[
+        AssetCheckSpec(name, asset="raw_plays", description=text)
+        for name, text in RAW_CHECKS.items()
+    ],
 )
-def raw_plays(context: AssetExecutionContext, data: DataRoot) -> MaterializeResult:
-    """A week of nflverse play-by-play, checked complete against the nflverse schedule.
+def raw_plays(
+    context: AssetExecutionContext, data: DataRoot, config: IngestConfig
+) -> Iterator[Any]:
+    """A week of nflverse play-by-play, checked before anything is built from it.
 
     nflverse publishes a file per season and rewrites it nightly in season; the download
     is conditional on its ETag, so asking for a week whose season did not change costs a
-    request and no transfer. A week materializes only when every game the schedule lists
-    for it has a result and appears in the play-by-play.
+    request and no transfer. Each week then has to pass three checks (``RAW_CHECKS``): it
+    is complete against the schedule, it meets the raw contract, and its row counts are
+    the size of real football. A failure fails the run with every problem listed.
     """
     paths = data.paths()
     ingest.download_schedule(paths)
     weeks = by_season(context.partition_keys)
-    problems: list[str] = []
+    previous = provenance.load(paths).processed
+    failures: dict[str, list[str]] = {name: [] for name in RAW_CHECKS}
     games = 0
+    quarantined: list[int] = []
     for season, season_weeks in weeks.items():
-        ingest.download_season(season, paths, refresh=True)
-        complete = set(ingest.completed_weeks(paths, season))
-        for week in season_weeks:
-            key = week_key(season, week)
-            scheduled = ingest.scheduled_games(paths, season, week)
-            present = ingest.season_games(paths, season, week)
-            if not scheduled:
-                problems.append(f"{key}: the nflverse schedule lists no games for this week")
-            elif week not in complete:
-                problems.append(f"{key}: not every game of the week has a final result yet")
-            elif missing := sorted(scheduled - present):
-                problems.append(
-                    f"{key}: the play-by-play lacks {len(missing)} of {len(scheduled)} games "
-                    f"({', '.join(missing[:3])}); nflverse has not published them yet"
-                )
-            games += len(present)
-    if problems:
-        raise Failure(
-            description="not every requested week is complete in nflverse's data:\n"
-            + "\n".join(problems),
-            metadata={"problems": MetadataValue.md("\n".join(f"- {p}" for p in problems))},
+        inspected: list[tuple[dict[str, list[str]], int]] = []
+
+        def accept(
+            candidate: Path,
+            season: int = season,
+            season_weeks: list[int] = season_weeks,
+            inspected: list[tuple[dict[str, list[str]], int]] = inspected,
+        ) -> None:
+            found = _inspect(candidate, paths, season, season_weeks, previous, config.bands())
+            inspected.append(found)
+            # A week not yet over is not a fault of the file; only integrity rejects it.
+            problems = found[0]["raw_contract"] + found[0]["row_counts"]
+            if problems:
+                raise DataQualityError(f"the new nflverse {season} file", problems)
+
+        try:
+            ingest.download_season(season, paths, refresh=True, accept=accept)
+        except DataQualityError:
+            quarantined.append(season)
+        found, count = (
+            inspected[0]
+            if inspected
+            else _inspect(
+                paths.season_raw(season), paths, season, season_weeks, previous, config.bands()
+            )
+        )
+        for name, problems in found.items():
+            failures[name] += problems
+        games += count
+    results = _results(failures)
+    if any(failures.values()):
+        yield from results
+        held = (
+            f"; the rejected download is in {ingest.quarantine_dir(paths)} and the previous "
+            "season file is still in place"
+            if quarantined
+            else ""
+        )
+        raise _failure(
+            f"nflverse week{'s' if len(context.partition_keys) > 1 else ''} "
+            + ", ".join(context.partition_keys),
+            failures,
+            note=held,
         )
     manifest = provenance.load(paths)
-    return MaterializeResult(
+    yield MaterializeResult(
         metadata={
             "weeks": len(context.partition_keys),
             "games": games,
@@ -114,7 +243,8 @@ def raw_plays(context: AssetExecutionContext, data: DataRoot) -> MaterializeResu
             "raw_sha256": MetadataValue.json(
                 {str(season): manifest.raw[season].sha256[:12] for season in weeks}
             ),
-        }
+        },
+        check_results=results,
     )
 
 
@@ -124,24 +254,38 @@ def raw_plays(context: AssetExecutionContext, data: DataRoot) -> MaterializeResu
     deps=[raw_plays],
     group_name="ingest",
     kinds={"polars", "parquet"},
+    check_specs=[
+        AssetCheckSpec(
+            "processed_contract",
+            asset="processed_plays",
+            description="Exact columns and types, value ranges, allowed labels, and the "
+            "partition's own season and week (Pandera).",
+        )
+    ],
 )
-def processed_plays(context: AssetExecutionContext, data: DataRoot) -> MaterializeResult:
+def processed_plays(context: AssetExecutionContext, data: DataRoot) -> Iterator[Any]:
     """The week's plays through the Polars transform: ``season=S/week=WW.parquet``.
 
     A run that covers every week of a season transforms the season file once; otherwise
-    each week is transformed alone and the other weeks' files keep their bytes.
+    each week is transformed alone and the other weeks' files keep their bytes. Every
+    partition is checked against the processed contract before it is written.
     """
     paths = data.paths()
     written: list[str] = []
-    for season, season_weeks in by_season(context.partition_keys).items():
-        on_file = set(ingest.season_weeks(paths, season))
-        if on_file and on_file <= set(season_weeks):
-            etl.transform_season(season, paths)
-            written += [week_key(season, week) for week in sorted(on_file)]
-        else:
-            for week in season_weeks:
-                etl.transform_week(season, week, paths)
-                written.append(week_key(season, week))
+    try:
+        for season, season_weeks in by_season(context.partition_keys).items():
+            on_file = set(ingest.season_weeks(paths, season))
+            if on_file and on_file <= set(season_weeks):
+                etl.transform_season(season, paths)
+                written += [week_key(season, week) for week in sorted(on_file)]
+            else:
+                for week in season_weeks:
+                    etl.transform_week(season, week, paths)
+                    written.append(week_key(season, week))
+    except DataQualityError as error:
+        failures = {"processed_contract": [f"{error.subject}: {p}" for p in error.problems]}
+        yield from _results(failures)
+        raise _failure("the processed partitions", failures) from error
     manifest = provenance.load(paths)
     records = [manifest.processed[key] for key in written if key in manifest.processed]
     metadata: dict[str, Any] = {
@@ -152,7 +296,24 @@ def processed_plays(context: AssetExecutionContext, data: DataRoot) -> Materiali
     if len(records) == 1:
         metadata["path"] = records[0].path
         metadata["sha256"] = records[0].sha256[:12]
-    return MaterializeResult(metadata=metadata)
+    yield MaterializeResult(metadata=metadata, check_results=_results({"processed_contract": []}))
+
+
+@asset_check(
+    asset=processed_plays,
+    description="In season, every week the schedule shows over (two days' grace) is ingested.",
+)
+def fresh_in_season(data: DataRoot) -> AssetCheckResult:
+    """Freshness against the nflverse schedule (``fourthdown.quality.freshness``); alerts."""
+    paths = data.paths()
+    ingest.download_schedule(paths)
+    report = freshness.check(paths, provenance.load(paths).processed, date.today())
+    if not report.passed:
+        alerts.send("the data is behind the season", "\n".join(report.stale))
+    return AssetCheckResult(
+        passed=report.passed,
+        metadata={"status": report.summary(), "in_season": report.in_season},
+    )
 
 
 @asset(group_name="ingest", kinds={"parquet"})
@@ -254,6 +415,25 @@ def warehouse_models(
 
 
 # --- what reads the warehouse -------------------------------------------------------------
+
+
+@asset_check(
+    asset=AssetKey("plays"),
+    blocking=True,
+    description="Every model feature is a declared pre-snap column, none is an nflfastR "
+    "model output, and none predicts its target with AUC above 0.95. Blocks training.",
+)
+def leakage_contract(data: DataRoot) -> AssetCheckResult:
+    """The leakage contract (``fourthdown.quality.leakage``) on the warehouse."""
+    with warehouse.connect(data.paths()) as connection:
+        report = leakage.check(connection)
+    return AssetCheckResult(
+        passed=report.passed,
+        metadata={
+            "violations": MetadataValue.json(report.violations),
+            "single_feature_auc": MetadataValue.md(report.render()),
+        },
+    )
 
 
 class IndexConfig(Config):
@@ -436,6 +616,8 @@ def model_scorecard(data: DataRoot, config: ScorecardConfig) -> Iterator[Any]:
         metadata={"failures": MetadataValue.json(failures)},
     )
 
+
+CHECKS = [leakage_contract, fresh_in_season]
 
 ASSETS = [
     raw_plays,

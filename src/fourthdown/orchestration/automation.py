@@ -9,6 +9,10 @@
   since nflverse corrects a week's stats in the days after it.
 * ``new_data_sensor``: when a processed week is newer than the last warehouse build, runs
   ``publish``. Several weeks landing together (a backfill) make one publish run.
+* ``daily_freshness`` (noon New York time, September through February): the
+  ``fresh_in_season`` check, which alerts when a finished week is not in the data.
+* ``alert_on_failure``: any failed run (a week that fails its data contract, a dbt test, the
+  leakage contract) goes to ``fourthdown.quality.alerts`` with the failing steps' errors.
 
 Runs queue one at a time (``docker/dagster.yaml``): every one of them writes the same
 data volume.
@@ -22,11 +26,13 @@ from dagster import (
     DagsterInstance,
     DefaultScheduleStatus,
     DefaultSensorStatus,
+    RunFailureSensorContext,
     RunRequest,
     ScheduleEvaluationContext,
     SensorEvaluationContext,
     SkipReason,
     define_asset_job,
+    run_failure_sensor,
     schedule,
     sensor,
 )
@@ -35,6 +41,7 @@ from fourthdown.config import data_paths
 from fourthdown.data import ingest
 from fourthdown.orchestration import partitions
 from fourthdown.orchestration.assets import (
+    fresh_in_season,
     model_scorecard,
     narrative_index,
     processed_plays,
@@ -44,8 +51,10 @@ from fourthdown.orchestration.assets import (
     warehouse_models,
 )
 from fourthdown.orchestration.partitions import WEEKS
+from fourthdown.quality import alerts
 
-INGEST = AssetSelection.assets(raw_plays, processed_plays)
+# Freshness runs on its own daily schedule, not inside every ingest.
+INGEST = AssetSelection.assets(raw_plays, processed_plays) - AssetSelection.checks(fresh_in_season)
 WAREHOUSE = AssetSelection.assets(raw_players, warehouse_models)
 MODELS = AssetSelection.assets(trained_models, model_scorecard)
 
@@ -64,6 +73,12 @@ publish_without_index_job = define_asset_job(
     "publish_without_index",
     selection=WAREHOUSE | MODELS,
     description="`publish` for deployments with no Postgres or embedding model.",
+)
+
+freshness_job = define_asset_job(
+    "check_freshness",
+    selection=AssetSelection.checks(fresh_in_season),
+    description="Is every finished week of the season in the data?",
 )
 
 WEEKLY_CRON = "0 10 * 1,2,9-12 2"
@@ -114,3 +129,28 @@ def _latest(instance: DagsterInstance, key: AssetKey) -> int | None:
     """The event-log position of the asset's latest materialization (any partition)."""
     records = instance.fetch_materializations(key, limit=1).records
     return records[0].storage_id if records else None
+
+
+@schedule(
+    job=freshness_job,
+    cron_schedule="0 12 * 1,2,9-12 *",
+    execution_timezone="America/New_York",
+    default_status=DefaultScheduleStatus.RUNNING,
+)
+def daily_freshness(context: ScheduleEvaluationContext) -> RunRequest:
+    day = context.scheduled_execution_time.strftime("%Y-%m-%d")
+    return RunRequest(run_key=f"freshness@{day}")
+
+
+@run_failure_sensor(default_status=DefaultSensorStatus.RUNNING)
+def alert_on_failure(context: RunFailureSensorContext) -> None:
+    """Send every failed run, with what each failing step said, to the alert channel."""
+    steps = [
+        f"{event.step_key}: {event.step_failure_data.error.message.strip()}"
+        for event in context.get_step_failure_events()
+        if event.step_failure_data.error is not None
+    ]
+    alerts.send(
+        f"run {context.dagster_run.job_name} failed ({context.dagster_run.run_id[:8]})",
+        "\n".join(steps) or context.failure_event.message or "see the run's logs",
+    )

@@ -209,6 +209,71 @@ daemon, which runs the schedule and sensor. Both share one instance on the data 
 the same DuckDB file, Parquet, and MLflow registry. The cluster has no daemon. A weekly
 cluster refresh is a new pipeline Job, and that is a no-op when nothing landed.
 
+### Data quality gates every stage (phase 10)
+
+`src/fourthdown/quality/` holds what each stage must be true of before the next one may
+use it. Every check reports through `DataQualityError`, one line per failure, in words,
+with example values. That way a failed run's message is the diagnosis.
+
+**Contracts (Pandera) at the two boundaries.** The raw contract is structural, because
+the raw file belongs to someone else. It checks that the columns the ETL cannot do without
+are present (`schema.REQUIRED_SOURCE_COLUMNS`), that the columns read as numbers are
+numbers, that play keys are present and unique, and that the file holds the season it is
+named for. This matters because the ETL used to fill a missing column with nulls and cast
+text to numbers without complaint: a renamed `down` would have become a season of null
+downs and empty buckets. The processed contract covers the table everything downstream
+trusts: exactly the 117 contracted columns in order, each with its type; value ranges set
+from profiling every play since 2009 (down 1-4, quarter 1-6, timeouts 0-3, probabilities
+0-1, and so on); labels from known sets; and only the partition's own season and week.
+The ETL now casts every column to its contract type, so its output no longer depends on the
+input's types; on real data the casts are a no-op, with byte-identical partitions. Each
+week passes before any is written, so a bad file writes nothing.
+
+**Row counts are their own check,** because a file can meet every column contract and
+still be wrong. From 2009 to 2025 every game has 135-245 rows and every week averages
+161-207 per game. A game under 100 or over 300 rows, a week averaging outside 145-225, or
+a re-delivered week more than 5% off its last ingest fails. The last one is drift:
+nflverse republishes weeks for days after them, and a correction moves a handful of plays,
+not a twentieth of the week.
+
+**A rejected download never replaces a good file.** A new season file lands beside the
+old one and must pass the raw contract and the row counts first. A file that fails goes to
+`data/raw/quarantine/` with a timestamp, and the previous file and its manifest record stay.
+The next run asks nflverse again with the previous ETag. Completeness ("the week is not
+over") never quarantines a file, since that is not the file's fault.
+
+**The leakage contract** is enforced before any training: by `release.train_and_release`
+(so `fourthdown train` too), and in Dagster as a blocking check on `plays`, so a broken
+contract skips `trained_models`. It has two layers, because neither catches what the other
+does:
+
+| layer | rule | what only it catches |
+| --- | --- | --- |
+| declared | every feature is in `schema.PRE_SNAP_COLUMNS`, none in `LEAKAGE_COLUMNS` | `wp` (AUC 0.84 alone, the same as `score_differential`'s 0.83; no data test could single it out) |
+| measured | no feature alone predicts its target with AUC above 0.95 | a post-snap outcome declared as pre-snap: `pass_play` predicts the play call with AUC 1.0 |
+
+The real features top out at 0.83 (`score_differential` for the winner, `shotgun` 0.71 for
+the call). The AUCs are reported with every check, so a feature creeping toward the line
+is visible before it crosses it.
+
+**Freshness is measured against the schedule, not a clock.** "No update in seven days" is
+wrong in a bye week and in February. "A week ended two days ago and isn't in the data" is
+right all year. The check also notices nflverse falling behind: games two days past with
+no result. It runs daily at noon New York time, September to February, and passes out of
+season.
+
+**Alerts.** The freshness check alerts when it fails, and a run-failure sensor sends
+every failed run with each failing step's message. Alerts always go to the log and the
+Dagster UI, and to a Slack or Discord webhook when `FOURTHDOWN_ALERT_WEBHOOK` is set. The
+URL is a credential and is never logged.
+
+**What it found.** The processed contract's first pass over 2009-2025 failed on one value
+in 816,856 plays. nflverse's timeout counter reads -1 after a third timeout in playoff
+overtime (2025 week 20, BUF at DEN). The ETL now floors it at 0, which changed that one
+partition. When nflverse's real 2026 file was republished with one week-10 game cut to 40
+plays, the run failed on both row-count checks, quarantined the download, and left the
+previous file, the week's partition, and the live warehouse as they were.
+
 ## Query layer (built)
 
 ```
@@ -723,3 +788,4 @@ kind port mapping.
 | 07c | gateway and tool services, provider-agnostic LLM, hybrid routing | done |
 | 08 | dbt: star schema, tendency mart, data tests that gate the build, dbt docs in CI | done |
 | 09 | Dagster asset graph partitioned by NFL week, incremental dbt, weekly schedule, new-data sensor | done |
+| 10 | Pandera contracts at ingest, row-count drift, quarantine, a leakage contract that blocks training, freshness alerts | done |

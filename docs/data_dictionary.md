@@ -50,8 +50,10 @@ They are kept in the warehouse because they are the right tool for analytics que
 and the honest baseline to compare against — `xpass` in particular is a fitted
 pass-probability model, which is exactly what our play-call model predicts. Training on
 them produces a model that scores well and has learned nothing: `wp` is an outcome-aware
-estimate, and `epa` is computed after the play resolves. The split is enforced by
-convention now and by the feature-builder in phase 04.
+estimate, and `epa` is computed after the play resolves. The split is enforced by the
+feature-builder and, since phase 10, by the leakage contract
+(`fourthdown.quality.leakage`), which fails training if a feature is not a declared
+pre-snap column or predicts its target almost perfectly.
 
 ## Known data quirks
 
@@ -69,3 +71,7 @@ convention now and by the feature-builder in phase 04.
   question about "the San Diego Chargers in 2013" must be mapped to `LAC`, and any answer
   should say so rather than silently renaming history. The alias table belongs in the
   text-to-SQL prompt.
+- **Timeouts below zero in playoff overtime.** nflverse's counter reads -1 after a team's
+  third timeout in postseason overtime (2025 week 20, BUF at DEN, two plays). The
+  processed contract allows 0-3, and the ETL floors the counter at 0; it found this on its
+  first pass over 2009-2025, the one value out of range in 816,856 plays.

@@ -6,6 +6,7 @@ import importlib
 import logging
 import os
 from contextlib import ExitStack
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -25,6 +26,7 @@ from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
 from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
 from fourthdown.models.winprob import GameState, WinProbabilityModel
 from fourthdown.narrative.render import GRAINS
+from fourthdown.quality import DataQualityError
 from fourthdown.rag import schema_card
 from fourthdown.rag.text_to_sql import TextToSQL
 from fourthdown.retrieval import DocumentStore, Retriever, default_embedder, index, recall
@@ -130,8 +132,17 @@ def etl_cmd(
     _configure_logging(verbose)
     paths = data_paths(data_dir)
     wanted = ingest.parse_seasons(seasons, latest=_latest_season())
-    written = list(etl.transform_seasons(wanted, paths))
+    written = _transform(wanted, paths)
     typer.echo(f"{len(written)} partitions written to {paths.processed}")
+
+
+def _transform(seasons: list[int], paths: Paths) -> list[Path]:
+    """`etl.transform_seasons`, turning a failed data contract into a clean exit."""
+    try:
+        return list(etl.transform_seasons(seasons, paths))
+    except DataQualityError as error:
+        typer.echo(f"{error}\nThat season's partitions were left as they were.", err=True)
+        raise typer.Exit(code=1) from error
 
 
 @app.command("warehouse")
@@ -478,6 +489,66 @@ def scorecard_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("quality")
+def quality_cmd(
+    seasons: Seasons = DEFAULT_SEASONS,
+    freshness: Annotated[
+        bool,
+        typer.Option(
+            "--freshness/--no-freshness",
+            help="Also check the current season against the nflverse schedule (downloads it).",
+        ),
+    ] = True,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Run every data contract against the data on disk, and fail if any is broken.
+
+    The processed contract on each weekly partition, the row-count bands, the leakage
+    contract on the warehouse, and (in season) freshness against the schedule.
+    """
+    import polars as pl
+
+    from fourthdown.quality import contracts, leakage, volume
+    from fourthdown.quality import freshness as fresh
+
+    _configure_logging(verbose)
+    paths = data_paths(data_dir)
+    wanted = set(ingest.parse_seasons(seasons, latest=_latest_season()))
+    manifest = provenance.load(paths)
+    problems: list[str] = []
+    checked = 0
+    for key, record in sorted(manifest.processed.items()):
+        if record.season not in wanted:
+            continue
+        frame = pl.read_parquet(paths.week_processed(record.season, record.week))
+        try:
+            contracts.validate_processed(frame, season=record.season, week=record.week)
+        except DataQualityError as error:
+            problems += [f"{key}: {problem}" for problem in error.problems]
+        problems += volume.check_week(frame, key)
+        checked += 1
+    typer.echo(
+        f"{checked} weekly partitions checked against the processed contract and volume bands"
+    )
+    with warehouse.connect(paths) as connection:
+        report = leakage.check(connection)
+    problems += report.violations
+    typer.echo(f"leakage contract: {'passed' if report.passed else 'BROKEN'}")
+    if verbose:
+        typer.echo(report.render())
+    if freshness:
+        ingest.download_schedule(paths)
+        status = fresh.check(paths, manifest.processed, date.today())
+        typer.echo(f"freshness: {status.summary()}")
+        problems += status.stale
+    for problem in problems:
+        typer.echo(f"FAIL {problem}", err=True)
+    if problems:
+        raise typer.Exit(code=1)
+    typer.echo("every data contract holds")
+
+
 @app.command("lineage")
 def lineage_cmd(
     output: Output = Path("docs/lineage.md"),
@@ -559,6 +630,9 @@ def train_cmd(
         for problem in error.problems:
             typer.echo(f"DRIFT {problem}", err=True)
         typer.echo("data does not match data/manifest.json; rerun `fourthdown build`", err=True)
+        raise typer.Exit(code=1) from error
+    except DataQualityError as error:
+        typer.echo(f"{error}\nNothing was trained.", err=True)
         raise typer.Exit(code=1) from error
     card, results = outcome.card, outcome.results
     if card.mlflow_run_id:
@@ -968,7 +1042,7 @@ def build(
     wanted = ingest.parse_seasons(seasons, latest=_latest_season())
     list(ingest.download_seasons(wanted, paths))
     ingest.download_players(paths)
-    list(etl.transform_seasons(wanted, paths))
+    _transform(wanted, paths)
     target = _build_warehouse(paths)
     typer.echo(f"built {len(wanted)} seasons into {target}")
 

@@ -13,8 +13,8 @@ which weeks are over: a week is complete when every one of its games has a resul
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Iterator
-from datetime import date
+from collections.abc import Callable, Iterable, Iterator
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import polars as pl
@@ -77,7 +77,12 @@ def parse_seasons(spec: str, *, latest: int | None = None) -> list[int]:
 
 
 def download_season(
-    season: int, paths: Paths, *, force: bool = False, refresh: bool = False
+    season: int,
+    paths: Paths,
+    *,
+    force: bool = False,
+    refresh: bool = False,
+    accept: Callable[[Path], None] | None = None,
 ) -> Path:
     """Fetch one season to ``paths.raw``, returning the local path.
 
@@ -85,6 +90,9 @@ def download_season(
         force: download even when the file is on disk.
         refresh: ask nflverse whether its copy changed (a conditional request against the
             recorded ETag) and download only if it did. What the weekly pipeline uses.
+        accept: called with a newly downloaded file before it replaces the one on disk;
+            if it raises, the new file is moved to ``raw/quarantine/`` and the previous
+            file (and its manifest record) stay as they were.
     """
     destination = paths.season_raw(season)
     url = season_url(season)
@@ -104,15 +112,33 @@ def download_season(
     )
     etag = previous.etag if conditional and previous is not None else None
     LOGGER.info("%s season %s from %s", "checking" if etag else "downloading", season, url)
-    fetched = _fetch(url, destination, etag=etag)
+    incoming = destination.with_name(f"{destination.stem}.incoming.parquet")
+    fetched = _fetch(url, incoming, etag=etag)
     if fetched is None:
         LOGGER.info("season %s unchanged since %s", season, previous and previous.retrieved_at)
         provenance.record_raw(paths, season, url=url, downloaded=False)
         return destination
+    if accept is not None:
+        try:
+            accept(incoming)
+        except Exception:
+            held = quarantine_dir(paths) / (
+                f"{destination.stem}.{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.parquet"
+            )
+            held.parent.mkdir(parents=True, exist_ok=True)
+            incoming.replace(held)
+            LOGGER.error("rejected the new %s file; kept it at %s", season, held)
+            raise
+    incoming.replace(destination)
     provenance.record_raw(
         paths, season, url=url, downloaded=True, etag=fetched[0], last_modified=fetched[1]
     )
     return destination
+
+
+def quarantine_dir(paths: Paths) -> Path:
+    """Where downloads that failed their checks are kept, for a person to look at."""
+    return paths.root / "raw" / "quarantine"
 
 
 def _fetch(

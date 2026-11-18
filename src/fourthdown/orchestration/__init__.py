@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from dagster import Definitions
 
-from fourthdown.orchestration.assets import ASSETS, DataRoot, dbt_resource
+from fourthdown.orchestration.assets import ASSETS, CHECKS, DataRoot, dbt_resource
 from fourthdown.orchestration.automation import (
+    alert_on_failure,
+    daily_freshness,
+    freshness_job,
     ingest_job,
     new_data_sensor,
     publish_job,
@@ -20,9 +23,10 @@ from fourthdown.orchestration.automation import (
 
 defs = Definitions(
     assets=ASSETS,
-    jobs=[ingest_job, publish_job, publish_without_index_job],
-    schedules=[weekly_ingest],
-    sensors=[new_data_sensor],
+    asset_checks=CHECKS,
+    jobs=[ingest_job, publish_job, publish_without_index_job, freshness_job],
+    schedules=[weekly_ingest, daily_freshness],
+    sensors=[new_data_sensor, alert_on_failure],
     resources={"data": DataRoot(), "dbt": dbt_resource()},
 )
 

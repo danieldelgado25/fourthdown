@@ -25,6 +25,7 @@ from fourthdown.models import train as training
 from fourthdown.models.card import MODEL_CARD, ModelCard
 from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
 from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
+from fourthdown.quality import leakage
 
 PROMOTE_MODES = ("gated", "never", "always")
 CANDIDATE_DIR = ".candidate"
@@ -96,6 +97,8 @@ def train_and_release(
 
     Raises:
         DataDriftError: the data on disk is not what the manifest records.
+        DataQualityError: the leakage contract is broken (``fourthdown.quality.leakage``);
+            nothing is trained.
         ValueError: ``promote`` is not one of ``PROMOTE_MODES``.
     """
     if promote not in PROMOTE_MODES:
@@ -109,6 +112,7 @@ def train_and_release(
     candidate.mkdir(parents=True)
     try:
         with warehouse.connect(paths) as connection:
+            leakage.enforce(connection)
             results = training.run(
                 connection,
                 model_dir=candidate,

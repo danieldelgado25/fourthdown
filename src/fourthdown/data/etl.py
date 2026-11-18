@@ -21,6 +21,7 @@ import polars as pl
 
 from fourthdown.config import Paths, data_paths
 from fourthdown.data import provenance, schema
+from fourthdown.quality import contracts
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,9 +48,34 @@ def _project_source(frame: pl.LazyFrame) -> pl.LazyFrame:
     )
 
 
+TIMEOUT_COLUMNS = ("posteam_timeouts_remaining", "defteam_timeouts_remaining")
+
+
+def _floored(column: str) -> pl.Expr:
+    """nflverse's timeout counter reads -1 after a third timeout in playoff overtime (2025
+    BUF at DEN, week 20: two plays); a team cannot have fewer than none."""
+    return pl.col(column).cast(pl.Int32, strict=False).clip(lower_bound=0)
+
+
 def _normalise_types(frame: pl.LazyFrame) -> pl.LazyFrame:
-    casts = [pl.col(column).cast(pl.Int32, strict=False) for column in schema.INT_COLUMNS]
+    """Cast every contracted column to its contract type, whatever the file carried.
+
+    nflverse files already match for every season since 2009; the casts make the output
+    independent of the input's types (a column a season lacks arrives as nulls of no type).
+    """
+    casts = [
+        _floored(column)
+        if column in TIMEOUT_COLUMNS
+        else pl.col(column).cast(pl.Int32, strict=False)
+        for column in schema.INT_COLUMNS
+    ]
     casts += [(pl.col(column) != 0).alias(column) for column in schema.BOOL_COLUMNS]
+    casts += [pl.col(column).cast(pl.Float64, strict=False) for column in schema.FLOAT_COLUMNS]
+    casts += [
+        pl.col(column).cast(pl.Utf8)
+        for column in schema.STRING_COLUMNS
+        if column not in schema.DERIVED_COLUMNS
+    ]
     game_date = pl.col("game_date")
     if frame.collect_schema()["game_date"] == pl.Utf8:
         game_date = game_date.str.to_date(strict=False)
@@ -189,6 +215,23 @@ def _source(paths: Paths, season: int) -> pl.LazyFrame:
     return pl.scan_parquet(source)
 
 
+def _checked_source(paths: Paths, season: int, week: int | None = None) -> pl.LazyFrame:
+    """The contracted raw columns, validated (``fourthdown.quality.contracts``) first.
+
+    Raises:
+        DataQualityError: the file breaks the raw contract.
+    """
+    frame = _source(paths, season)
+    available = set(frame.collect_schema().names())
+    frame = frame.select([column for column in schema.SOURCE_COLUMNS if column in available])
+    if week is not None:
+        frame = frame.filter(pl.col("week") == week)
+    raw = frame.collect()
+    subject = f"the nflverse {season} file" + (f", week {week}," if week is not None else "")
+    contracts.validate_raw(raw, season=season, subject=subject)
+    return raw.lazy()
+
+
 def _write(table: pl.DataFrame, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(".parquet.part")
@@ -204,12 +247,19 @@ def transform_season(season: int, paths: Paths | None = None) -> list[Path]:
     """
     resolved = paths or data_paths()
     LOGGER.info("transforming season %s", season)
-    table = transform(_source(resolved, season)).collect()
+    table = transform(_checked_source(resolved, season)).collect()
+    parts = {
+        int(week): part
+        for (week,), part in table.partition_by("week", as_dict=True, maintain_order=True).items()
+    }
+    # Every week passes the contract before any is written: a bad file writes nothing.
+    for week, part in parts.items():
+        contracts.validate_processed(part, season=season, week=week)
     season_dir = resolved.season_processed(season)
     season_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     rows: dict[int, int] = {}
-    for (week,), part in table.partition_by("week", as_dict=True, maintain_order=True).items():
+    for week, part in parts.items():
         destination = resolved.week_processed(season, int(week))
         _write(part, destination)
         written.append(destination)
@@ -227,15 +277,18 @@ def transform_week(season: int, week: int, paths: Paths | None = None) -> Path:
     Raises:
         ValueError: the raw file has no plays for that week (not played, or not
             published yet).
+        DataQualityError: the raw week or its partition breaks its contract; nothing
+            is written.
     """
     resolved = paths or data_paths()
     if (resolved.season_processed(season) / "plays.parquet").exists():
         # A season written whole by an earlier version: split it once, then go weekly.
         LOGGER.info("season %s predates weekly partitions; splitting it", season)
         transform_season(season, resolved)
-    table = transform(_source(resolved, season).filter(pl.col("week") == week)).collect()
+    table = transform(_checked_source(resolved, season, week)).collect()
     if table.is_empty():
         raise ValueError(f"the raw {season} file has no plays for week {week}")
+    contracts.validate_processed(table, season=season, week=week)
     destination = resolved.week_processed(season, week)
     _write(table, destination)
     provenance.record_week_partition(resolved, season, week, rows=table.height)

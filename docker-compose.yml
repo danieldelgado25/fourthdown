@@ -99,6 +99,7 @@ services:
       FOURTHDOWN_PG_DSN: *dsn
       FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-}
       FOURTHDOWN_TRAIN_ARGS: ${FOURTHDOWN_TRAIN_ARGS:-}
+      FOURTHDOWN_ALERT_WEBHOOK: ${FOURTHDOWN_ALERT_WEBHOOK:-}
     command:
       - sh
       - -c
@@ -123,6 +124,8 @@ services:
     environment: &dagster
       <<: *ollama
       FOURTHDOWN_PG_DSN: *dsn
+      # Where failed runs and stale data are reported (fourthdown.quality.alerts).
+      FOURTHDOWN_ALERT_WEBHOOK: ${FOURTHDOWN_ALERT_WEBHOOK:-}
     command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-m", "fourthdown.orchestration"]
     ports:
       - "127.0.0.1:3000:3000"

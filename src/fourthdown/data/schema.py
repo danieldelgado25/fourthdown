@@ -202,6 +202,12 @@ INT_COLUMNS: tuple[str, ...] = (
     "posteam_score",
     "defteam_score",
     "score_differential",
+    "home_score",
+    "away_score",
+    "result",
+    "total",
+    "temp",
+    "wind",
 )
 
 BOOL_COLUMNS: tuple[str, ...] = (
@@ -237,3 +243,105 @@ BOOL_COLUMNS: tuple[str, ...] = (
     "div_game",
     "success",
 )
+
+FLOAT_COLUMNS: tuple[str, ...] = (
+    "quarter_seconds_remaining",
+    "half_seconds_remaining",
+    "game_seconds_remaining",
+    "spread_line",
+    "total_line",
+    *(column for column in MODEL_OUTPUT_COLUMNS if column != "success"),
+)
+
+DATE_COLUMNS: tuple[str, ...] = ("game_date",)
+
+DERIVED_BOOL_COLUMNS: tuple[str, ...] = (
+    "posteam_is_home",
+    "posteam_won",
+    "is_early_down",
+    "is_two_minute",
+    "is_neutral_script",
+    "is_garbage_time",
+    "is_designed_play",
+    "is_pass_call",
+)
+
+STRING_COLUMNS: tuple[str, ...] = tuple(
+    column
+    for column in PROCESSED_COLUMNS
+    if column
+    not in {*INT_COLUMNS, *BOOL_COLUMNS, *FLOAT_COLUMNS, *DATE_COLUMNS, *DERIVED_BOOL_COLUMNS}
+)
+"""Every other processed column: ids, names, labels, and the derived buckets."""
+
+REQUIRED_SOURCE_COLUMNS: tuple[str, ...] = (
+    "game_id",
+    "play_id",
+    "season",
+    "season_type",
+    "week",
+    "game_date",
+    "home_team",
+    "away_team",
+    "posteam",
+    "defteam",
+    "fixed_drive",
+    "qtr",
+    "down",
+    "ydstogo",
+    "yardline_100",
+    "half_seconds_remaining",
+    "game_seconds_remaining",
+    "score_differential",
+    "play_type",
+    "pass",
+    "rush",
+    "qb_kneel",
+    "qb_spike",
+    "aborted_play",
+    "play_deleted",
+    "special",
+    "result",
+    "spread_line",
+    "wp",
+)
+"""Source columns the ETL cannot do without: the keys, and every input of a derived column
+or a model feature. Any other contracted column a season lacks is filled with nulls (seasons
+before 2006 have no completion probability); one of these missing means nflverse changed its
+layout, and the ETL refuses the file rather than derive buckets from nulls."""
+
+PRE_SNAP_COLUMNS: frozenset[str] = frozenset(
+    {
+        "yardline_100",
+        "down",
+        "ydstogo",
+        "goal_to_go",
+        "qtr",
+        "quarter_seconds_remaining",
+        "game_seconds_remaining",
+        "half_seconds_remaining",
+        "score_differential",
+        "posteam_score",
+        "defteam_score",
+        "posteam_timeouts_remaining",
+        "defteam_timeouts_remaining",
+        "posteam_is_home",
+        "posteam_spread",
+        "spread_line",
+        "total_line",
+        "shotgun",
+        "no_huddle",
+        "roof",
+        "surface",
+        "temp",
+        "wind",
+        "div_game",
+    }
+)
+"""The columns a model may use as features: known on the sideline before the snap.
+
+The leakage contract (`fourthdown.quality.leakage`) fails training when a feature list
+names anything else. Adding a feature means adding it here, with the argument that a coach
+knows it before the snap; ``shotgun`` and ``no_huddle`` qualify because the defense sees
+the formation. ``LEAKAGE_COLUMNS`` can never be added: they are other models' outputs.
+"""

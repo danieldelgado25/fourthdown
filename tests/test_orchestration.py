@@ -33,6 +33,7 @@ from fourthdown.config import data_paths
 from fourthdown.data import ingest, provenance
 from fourthdown.orchestration import defs, partitions
 from fourthdown.orchestration.automation import new_data_sensor, weekly_ingest
+from fourthdown.quality import alerts, leakage
 
 WAREHOUSE_CONFIG = {"ops": {"warehouse": {"config": {"run_tests": False}}}}
 
@@ -59,6 +60,7 @@ class FakeNflverse:
                 "game_id": list(self.results),
                 "season": [2023, 2023],
                 "week": [1, 2],
+                "gameday": ["2023-09-10", "2023-09-17"],
                 "result": list(self.results.values()),
             }
         )
@@ -78,6 +80,13 @@ class FakeNflverse:
         destination.parent.mkdir(parents=True, exist_ok=True)
         frame.write_parquet(destination)
         return current, "Tue, 19 Sep 2023 00:00:00 GMT"
+
+
+@pytest.fixture(autouse=True)
+def tiny_data_cannot_be_measured(monkeypatch):
+    """On a four-play game any feature separates the outcome perfectly; the measured half
+    of the leakage contract needs real seasons (tests/test_quality.py covers it)."""
+    monkeypatch.setattr(leakage, "measured", lambda frame, report: None)
 
 
 @pytest.fixture()
@@ -101,9 +110,14 @@ def instance():
         yield active
 
 
+# A synthetic game has a handful of plays, not 175: open the row-count bands for it.
+SMALL_GAMES = {"ops": {"raw_plays": {"config": {"min_plays_per_game": 1, "min_week_mean": 1}}}}
+
+
 def _ingest(instance: DagsterInstance, first: str, last: str | None = None):
     return defs.resolve_job_def("ingest_weeks").execute_in_process(
         instance=instance,
+        run_config=SMALL_GAMES,
         tags={ASSET_PARTITION_RANGE_START_TAG: first, ASSET_PARTITION_RANGE_END_TAG: last or first},
         raise_on_error=False,
     )
@@ -247,3 +261,126 @@ def test_training_is_skipped_when_the_data_has_not_changed(paths, instance, monk
     )
     assert result.success
     assert instance.get_latest_materialization_event(AssetKey("trained_models")) is None
+
+
+# --- phase 10: data quality in the graph --------------------------------------------------
+
+
+def _failure_text(result) -> str:
+    return "\n".join(
+        str(event.step_failure_data.error.message)
+        for event in result.all_events
+        if event.is_step_failure and event.step_failure_data.error is not None
+    )
+
+
+def _failed_checks(result) -> set[str]:
+    return {e.check_name for e in result.get_asset_check_evaluations() if not e.passed}
+
+
+def test_a_corrupted_file_fails_the_run_with_a_clear_message(nflverse, paths, instance):
+    # nflverse publishes ydstogo as text: a cast would have loaded it as nulls.
+    nflverse.season = nflverse.week_one.with_columns(pl.col("ydstogo").cast(pl.String))
+    ingest.download_schedule(paths)
+    partitions.register(instance, ["2023-01"])
+    result = _ingest(instance, "2023-01")
+    assert not result.success
+    assert _failed_checks(result) == {"raw_contract"}
+    message = _failure_text(result)
+    assert "nflverse week 2023-01 failed its data quality checks; nothing was written" in message
+    assert "2023-01: ydstogo: expected numbers, got String; it would load as nulls" in message
+    assert not paths.week_processed(2023, 1).exists()
+
+
+def test_impossible_values_fail_the_processed_contract(nflverse, paths, instance):
+    nflverse.season = nflverse.week_one.with_columns(pl.lit(9.0).alias("down"))
+    ingest.download_schedule(paths)
+    partitions.register(instance, ["2023-01"])
+    result = _ingest(instance, "2023-01")
+    assert not result.success
+    assert _failed_checks(result) == {"processed_contract"}
+    assert "down: 4 value(s) not between 1 and 4 (e.g. 9)" in _failure_text(result)
+    assert not paths.week_processed(2023, 1).exists()
+
+
+def test_a_truncated_redelivery_fails_the_row_counts(nflverse, paths, instance):
+    ingest.download_schedule(paths)
+    partitions.register(instance, ["2023-01"])
+    assert _ingest(instance, "2023-01").success
+    nflverse.season = nflverse.week_one.head(2)  # half the week comes back
+    result = _ingest(instance, "2023-01")
+    assert not result.success
+    assert _failed_checks(result) == {"row_counts"}
+    assert "2023-01: 2 plays, -50.0% against the 4 ingested before" in _failure_text(result)
+    assert pl.read_parquet(paths.week_processed(2023, 1)).height == 4
+
+
+def test_a_broken_leakage_contract_blocks_training(nflverse, paths, instance, monkeypatch):
+    from fourthdown.models import features, release
+
+    monkeypatch.setattr(features, "WP_FEATURES", (*features.WP_FEATURES, "wp"))
+    monkeypatch.setattr(
+        release, "train_and_release", lambda *a, **k: pytest.fail("trained past the contract")
+    )
+    ingest.download_schedule(paths)
+    partitions.register(instance, ["2023-01"])
+    assert _ingest(instance, "2023-01").success
+    selection = [
+        AssetKey("raw_players"),
+        *defs.resolve_assets_def("fact_plays").keys,
+        AssetKey("trained_models"),
+    ]
+    result = defs.resolve_implicit_global_asset_job_def().execute_in_process(
+        instance=instance,
+        asset_selection=selection,
+        run_config=WAREHOUSE_CONFIG,
+        raise_on_error=False,
+    )
+    assert not result.success
+    assert "leakage_contract" in _failed_checks(result)
+    assert instance.get_latest_materialization_event(AssetKey("trained_models")) is None
+    evaluation = next(
+        e for e in result.get_asset_check_evaluations() if e.check_name == "leakage_contract"
+    )
+    assert evaluation.metadata["violations"].value == [
+        "win probability: wp are nflfastR model outputs, never features"
+    ]
+
+
+def test_a_failed_run_is_sent_to_the_alert_channel(nflverse, paths, instance, monkeypatch):
+    from dagster import build_run_status_sensor_context
+
+    from fourthdown.orchestration.automation import alert_on_failure
+
+    sent = []
+    monkeypatch.setattr(alerts, "send", lambda title, body: sent.append((title, body)) or True)
+    nflverse.season = nflverse.week_one.with_columns(pl.lit(9.0).alias("down"))
+    ingest.download_schedule(paths)
+    partitions.register(instance, ["2023-01"])
+    result = _ingest(instance, "2023-01")
+    context = build_run_status_sensor_context(
+        sensor_name="alert_on_failure",
+        dagster_instance=instance,
+        dagster_run=result.dagster_run,
+        dagster_event=result.get_run_failure_event(),
+    ).for_run_failure()
+    alert_on_failure(context)
+    ((title, body),) = sent
+    assert title.startswith("run ingest_weeks failed")
+    assert "down: 4 value(s) not between 1 and 4" in body
+
+
+def test_a_rejected_download_is_quarantined_and_the_good_file_kept(nflverse, paths, instance):
+    ingest.download_schedule(paths)
+    partitions.register(instance, ["2023-01"])
+    assert _ingest(instance, "2023-01").success
+    good = paths.season_raw(2023).read_bytes()
+    nflverse.season = nflverse.week_one.with_columns(pl.col("ydstogo").cast(pl.String))
+    result = _ingest(instance, "2023-01")
+    assert not result.success
+    assert "the rejected download is in" in _failure_text(result)
+    assert paths.season_raw(2023).read_bytes() == good
+    (held,) = ingest.quarantine_dir(paths).glob("play_by_play_2023.*.parquet")
+    assert pl.read_parquet(held).schema["ydstogo"] == pl.String
+    # The kept file is the one the manifest records; no raw or processed drift.
+    assert [p for p in provenance.verify(paths) if p.startswith(("raw", "processed"))] == []
