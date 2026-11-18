@@ -13,3 +13,6 @@ __pycache__/
 node_modules/
 web/dist/
 /eval/
+
+# dbt parse output (the orchestrator loads its dbt assets from it)
+dbt_project/target/

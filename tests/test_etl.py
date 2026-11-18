@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import polars as pl
+import pytest
 
-from fourthdown.data import etl, schema
+from fourthdown.data import etl, provenance, schema
 
 
 def _transform(raw_frame: pl.DataFrame) -> pl.DataFrame:
@@ -68,11 +69,59 @@ def test_transform_fills_columns_a_season_does_not_publish(raw_frame):
     assert result["cpoe"].null_count() == result.height
 
 
-def test_transform_season_writes_a_partition(raw_frame, tmp_paths):
-    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+def _two_weeks(raw_frame: pl.DataFrame) -> pl.DataFrame:
+    week_two = raw_frame.with_columns(
+        week=pl.lit(2, dtype=raw_frame["week"].dtype), game_id=pl.lit("2023_02_BBB_AAA")
+    )
+    return pl.concat([raw_frame, week_two])
+
+
+def test_transform_season_writes_one_partition_per_week(raw_frame, tmp_paths):
+    _two_weeks(raw_frame).write_parquet(tmp_paths.season_raw(2023))
     written = etl.transform_season(2023, tmp_paths)
-    assert written == tmp_paths.season_processed(2023)
-    assert pl.read_parquet(written).height == raw_frame.height
+    assert written == [tmp_paths.week_processed(2023, 1), tmp_paths.week_processed(2023, 2)]
+    assert [pl.read_parquet(path).height for path in written] == [raw_frame.height] * 2
+    assert set(provenance.load(tmp_paths).processed) == {"2023-01", "2023-02"}
+
+
+def test_transform_week_leaves_the_other_weeks_alone(raw_frame, tmp_paths):
+    _two_weeks(raw_frame).write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    week_one = tmp_paths.week_processed(2023, 1)
+    before = (week_one.stat().st_mtime_ns, provenance.load(tmp_paths).processed["2023-01"])
+    etl.transform_week(2023, 2, tmp_paths)
+    assert (week_one.stat().st_mtime_ns, provenance.load(tmp_paths).processed["2023-01"]) == before
+
+
+def test_one_week_transformed_alone_matches_the_whole_season(raw_frame, tmp_paths):
+    # Every derived column is row-local, so a week's partition does not depend on how
+    # much of the season was transformed with it.
+    _two_weeks(raw_frame).write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    whole = pl.read_parquet(tmp_paths.week_processed(2023, 2))
+    etl.transform_week(2023, 2, tmp_paths)
+    assert pl.read_parquet(tmp_paths.week_processed(2023, 2)).equals(whole)
+
+
+def test_transform_week_refuses_a_week_not_in_the_file(raw_frame, tmp_paths):
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    with pytest.raises(ValueError, match="no plays for week 5"):
+        etl.transform_week(2023, 5, tmp_paths)
+
+
+def test_a_season_written_whole_is_split_into_weeks(raw_frame, tmp_paths):
+    # Data roots from before weekly partitions hold season=2023/plays.parquet.
+    _two_weeks(raw_frame).write_parquet(tmp_paths.season_raw(2023))
+    legacy = tmp_paths.season_processed(2023) / "plays.parquet"
+    legacy.parent.mkdir(parents=True)
+    raw_frame.write_parquet(legacy)
+    assert any("not in the manifest" in problem for problem in provenance.verify(tmp_paths))
+    etl.transform_week(2023, 2, tmp_paths)
+    assert not legacy.exists()
+    assert sorted(path.name for path in legacy.parent.iterdir()) == [
+        "week=01.parquet",
+        "week=02.parquet",
+    ]
 
 
 def test_leakage_columns_are_kept_but_flagged():

@@ -3,7 +3,10 @@
 # dashboard is on http://localhost:8000. Services start in any order and heal as their
 # dependencies (Postgres, Ollama models, trained artifacts) appear.
 # Data lives in ./data: build and train on the host (`make build train`), or in containers
-# with `make pipeline` (the `pipeline` profile: download, warehouse, train, then index).
+# with `make pipeline` (the `pipeline` profile: the Dagster asset graph, run once).
+# `make dagster-up` (the `dagster` profile) serves the Dagster UI on http://localhost:3000
+# and runs the daemon: the weekly schedule and the sensor that retrains when a week lands.
+# Start it after the one-shot pipeline has finished, not alongside it.
 # The chat model is any OpenAI-compatible endpoint (see fourthdown.llm.client): the bundled
 # Ollama by default, or a GPU server / hosted API by setting these three in .env. Narrative
 # embeddings always come from Ollama, so they match the index.
@@ -84,47 +87,63 @@ services:
       - ./data:/data
     restart: "no"
 
-  # One-shot: download, warehouse, and train into ./data; a no-op when ./data already
-  # holds a verified build of the same seasons and training flags (docker/pipeline.sh).
+  # One-shot: `fourthdown pipeline`, the Dagster asset graph run once. Downloads every
+  # completed week of FOURTHDOWN_SEASONS not processed yet, builds the warehouse with dbt,
+  # embeds the narratives not indexed yet into Postgres, and retrains unless the data and
+  # FOURTHDOWN_TRAIN_ARGS are what the last run used. A rerun with nothing new is cheap.
   pipeline:
-    build: { context: ., target: pipeline }
-    profiles: [pipeline]
-    environment:
-      FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-2025}
-      FOURTHDOWN_TRAIN_ARGS: ${FOURTHDOWN_TRAIN_ARGS:-}
-    volumes:
-      - ./data:/data
-    depends_on:
-      data-owner:
-        condition: service_completed_successfully
-    restart: "no"
-
-  # One-shot: embed game and postseason-drive narratives into Postgres.
-  index:
     build: { context: ., target: pipeline }
     profiles: [pipeline]
     environment:
       <<: *ollama
       FOURTHDOWN_PG_DSN: *dsn
-      # Every season the warehouse holds, so narrative questions about 2016 find 2016.
-      # --missing-only embeds just the seasons not indexed yet, so a rerun is cheap.
-      FOURTHDOWN_INDEX_SEASONS: ${FOURTHDOWN_INDEX_SEASONS:-2009-2025}
+      FOURTHDOWN_SEASONS: ${FOURTHDOWN_SEASONS:-2009-}
+      FOURTHDOWN_TRAIN_ARGS: ${FOURTHDOWN_TRAIN_ARGS:-}
     command:
       - sh
       - -c
       - >-
-        fourthdown index --seasons "$${FOURTHDOWN_INDEX_SEASONS}" --playoff-drives
-        --missing-only
+        exec fourthdown pipeline --seasons "$${FOURTHDOWN_SEASONS}" $${FOURTHDOWN_TRAIN_ARGS}
     volumes:
-      - ./data:/data:ro
+      - ./data:/data
     depends_on:
+      data-owner:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      pipeline:
-        condition: service_completed_successfully
       ollama-pull:
         condition: service_completed_successfully
     restart: "no"
+
+  # The Dagster UI (http://localhost:3000): the asset graph, every run's logs, the dbt
+  # tests as asset checks, and buttons to materialize a week or rerun publish.
+  dagster-webserver:
+    build: { context: ., target: pipeline }
+    profiles: [dagster]
+    environment: &dagster
+      <<: *ollama
+      FOURTHDOWN_PG_DSN: *dsn
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-m", "fourthdown.orchestration"]
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The daemon: the Tuesday schedule that ingests each new week, the sensor that then
+  # publishes (dbt, index, retrain, scorecard), and the queue that runs one at a time.
+  dagster-daemon:
+    build: { context: ., target: pipeline }
+    profiles: [dagster]
+    environment: *dagster
+    command: ["dagster-daemon", "run", "-m", "fourthdown.orchestration"]
+    volumes:
+      - ./data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   warehouse:
     build: { context: ., target: warehouse }

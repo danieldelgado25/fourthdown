@@ -2,8 +2,9 @@
 # restarts on failure and reboot, and Caddy in front for HTTPS (automatic Let's Encrypt)
 # and basic auth, since /api/ask runs the LLM. Only Caddy is reachable from outside.
 #   alias dc='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
-#   dc --profile pipeline pull && dc --profile pipeline up --no-build index   # once: data + index
+#   dc --profile pipeline pull && dc --profile pipeline up --no-build pipeline   # once: data
 #   dc --profile app pull && dc --profile app up -d --no-build
+#   dc --profile dagster up -d --no-build   # optional: weekly updates (UI on 127.0.0.1:3000)
 # .env needs POSTGRES_PASSWORD, FOURTHDOWN_DOMAIN, BASIC_AUTH_USER/_HASH, and the
 # rate-limited guest login GUEST_AUTH_USER/_HASH (see .env.example); FOURTHDOWN_TAG pins
 # a commit's images (default latest).
@@ -17,7 +18,11 @@ services:
     image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
   pipeline:
     image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
-  index:
+  dagster-webserver:
+    <<: *restart
+    image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
+  dagster-daemon:
+    <<: *restart
     image: ghcr.io/danieldelgado25/fourthdown-pipeline:${FOURTHDOWN_TAG:-latest}
   warehouse:
     <<: *restart

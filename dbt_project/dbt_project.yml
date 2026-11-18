@@ -3,7 +3,7 @@ version: "1.0.0"
 config-version: 2
 profile: fourthdown
 
-# The Polars ETL (fourthdown.data.etl) writes one processed Parquet partition per season;
+# The Polars ETL (fourthdown.data.etl) writes one processed Parquet partition per week;
 # everything from there to the tables the services query is this project:
 #
 #   staging   views over the Parquet, one per source, nothing renamed

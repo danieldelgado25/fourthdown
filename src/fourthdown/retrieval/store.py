@@ -285,6 +285,13 @@ class DocumentStore:
         rows = self._connection.execute("SELECT DISTINCT season FROM documents").fetchall()
         return {int(row[0]) for row in rows}
 
+    def doc_ids(self) -> set[str]:
+        """Every indexed document id; empty before the first index."""
+        exists = self._connection.execute("SELECT to_regclass('documents')").fetchone()
+        if not exists or exists[0] is None:
+            return set()
+        return {str(row[0]) for row in self._connection.execute("SELECT doc_id FROM documents")}
+
     def count(self, *, grain: str | None = None) -> int:
         row = self._connection.execute(
             "SELECT count(*) FROM documents WHERE (%s::text IS NULL OR grain = %s)",

@@ -25,7 +25,7 @@ import hashlib
 import json
 import logging
 import os
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -162,18 +162,25 @@ class BuildOutcome:
     tests: tuple[TestResult, ...]
 
 
+def _field(item: Any, name: str) -> Any:
+    """An attribute of a dbt node object, or a key of the same node read from JSON."""
+    if isinstance(item, Mapping):
+        return item.get(name)
+    return getattr(item, name, None)
+
+
 def _test_name(node: Any) -> str:
     """A readable label: ``accepted_values fact_plays.down``, or a singular test's name."""
-    metadata = getattr(node, "test_metadata", None)
+    metadata = _field(node, "test_metadata")
     if metadata is None:
-        return str(node.name).replace("_", " ")
-    model = str(getattr(node, "attached_node", None) or "").rsplit(".", 1)[-1]
-    column = getattr(node, "column_name", None)
+        return str(_field(node, "name")).replace("_", " ")
+    model = str(_field(node, "attached_node") or "").rsplit(".", 1)[-1]
+    column = _field(node, "column_name")
     target = f"{model}.{column}" if column else model
-    kwargs = metadata.kwargs or {}
+    kwargs = _field(metadata, "kwargs") or {}
     detail = kwargs.get("expression")
     suffix = f" ({detail})" if detail else ""
-    return f"{metadata.name} {target}{suffix}".strip()
+    return f"{_field(metadata, 'name')} {target}{suffix}".strip()
 
 
 def _dependency_name(unique_id: str) -> str:
@@ -226,18 +233,38 @@ def _models(manifest_path: Path) -> tuple[ModelRecord, ...]:
     return tuple(sorted(records, key=lambda record: (record.schema, record.name)))
 
 
-def build(paths: Paths, database: Path, *, run_tests: bool = True) -> BuildOutcome:
+def vars_args(weeks: Sequence[str] | None) -> list[str]:
+    """``--vars`` handing ``fact_plays`` the weeks to rebuild; none means all of them."""
+    return [] if weeks is None else ["--vars", json.dumps({"weeks": list(weeks)})]
+
+
+def build_args(*, run_tests: bool = True, weeks: Sequence[str] | None = None) -> list[str]:
+    """The ``dbt build`` arguments after ``build`` itself."""
+    args = []
+    if not run_tests:
+        # Tiny synthetic datasets (the unit tests') cannot pass league-wide checks.
+        args += ["--exclude-resource-type", "test", "--exclude-resource-type", "unit_test"]
+    return args + vars_args(weeks)
+
+
+def build(
+    paths: Paths,
+    database: Path,
+    *,
+    run_tests: bool = True,
+    weeks: Sequence[str] | None = None,
+) -> BuildOutcome:
     """``dbt build`` into ``database``: seeds, models, and (unless told not to) data tests.
+
+    ``weeks`` makes ``fact_plays`` rebuild only those weeks' games (an incremental build
+    on a copy of the live database; see ``warehouse.plan``).
 
     Raises:
         DbtError: a model failed to build or a data test failed. dbt skips everything
             downstream of a failure, so a failed build never yields a partial warehouse
             that looks complete.
     """
-    args = ["build", "--quiet"]
-    if not run_tests:
-        # Tiny synthetic datasets (the unit tests') cannot pass league-wide checks.
-        args += ["--exclude-resource-type", "test", "--exclude-resource-type", "unit_test"]
+    args = ["build", "--quiet", *build_args(run_tests=run_tests, weeks=weeks)]
     result = invoke(paths, args, database=database)
     if result.exception is not None:
         raise DbtError(f"dbt build did not run: {result.exception}") from result.exception
@@ -261,6 +288,57 @@ def build(paths: Paths, database: Path, *, run_tests: bool = True) -> BuildOutco
         raise DbtError("dbt build failed:\n  " + "\n  ".join(errors or ["see the dbt log"]))
     manifest_path = artifacts_dir(paths) / "target" / "manifest.json"
     return BuildOutcome(models=_models(manifest_path), tests=tuple(tests))
+
+
+def outcome_from_artifacts(target: Path) -> BuildOutcome:
+    """What a finished ``dbt build`` wrote, read from its ``run_results.json`` and manifest.
+
+    For builds dbt ran in another process (the orchestrator runs dbt through dagster-dbt).
+    """
+    manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+    results = json.loads((target / "run_results.json").read_text(encoding="utf-8"))
+    tests = [
+        TestResult(
+            name=_test_name(manifest["nodes"][result["unique_id"]]),
+            status=str(result["status"]),
+            failures=int(result.get("failures") or 0),
+            message=str(result.get("message") or ""),
+        )
+        for result in results["results"]
+        if result["unique_id"].startswith("test.")
+    ]
+    return BuildOutcome(models=_models(target / "manifest.json"), tests=tuple(tests))
+
+
+def parse_manifest() -> Path:
+    """Parse the project into ``<project>/target/manifest.json`` and return its path.
+
+    The orchestrator loads its dbt assets from this manifest. Parsing reads no data, so
+    any data root serves; the image does it once at build time.
+    """
+    project = project_dir()
+    target = project / "target"
+    manifest = target / "manifest.json"
+    sources = [project / "dbt_project.yml", project / "profiles.yml"]
+    for folder in ("models", "macros", "seeds", "tests"):
+        sources += [path for path in (project / folder).rglob("*") if path.is_file()]
+    if manifest.exists() and manifest.stat().st_mtime >= max(p.stat().st_mtime for p in sources):
+        return manifest
+    from fourthdown.config import data_paths
+
+    paths = data_paths()
+    with environment(paths):
+        os.environ["DBT_TARGET_PATH"] = str(target)
+        os.environ["DBT_LOG_PATH"] = str(target / "logs")
+        from dbt.cli.main import dbtRunner
+
+        try:
+            result = dbtRunner().invoke(["parse", "--quiet"])
+        finally:
+            _release_log_files()
+    if not result.success:
+        raise DbtError(f"dbt parse failed: {result.exception}")
+    return manifest
 
 
 def save_test_results(paths: Paths, tests: Sequence[TestResult]) -> Path:

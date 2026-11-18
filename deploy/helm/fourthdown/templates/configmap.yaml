@@ -20,3 +20,4 @@ data:
   FOURTHDOWN_SERVICES: {{ include "fourthdown.serviceUrls" . | quote }}
   FOURTHDOWN_SEASONS: {{ .Values.pipeline.seasons | quote }}
   FOURTHDOWN_TRAIN_ARGS: {{ .Values.pipeline.trainArgs | quote }}
+  FOURTHDOWN_INDEX_SEASONS: {{ .Values.index.seasons | quote }}

@@ -60,12 +60,39 @@ class Paths:
     def season_raw(self, season: int) -> Path:
         return self.raw / f"play_by_play_{season}.parquet"
 
+    @property
+    def schedule(self) -> Path:
+        """nflverse's schedule: every game of every season, with results once played."""
+        return self.root / "raw" / "schedules.parquet"
+
+    @property
+    def reports(self) -> Path:
+        """What a pipeline run writes for people: model eval, scorecard, lineage."""
+        return self.root / "reports"
+
     def season_processed(self, season: int) -> Path:
-        return self.processed / f"season={season}" / "plays.parquet"
+        """The directory holding a season's weekly partitions."""
+        return self.processed / f"season={season}"
+
+    def week_processed(self, season: int, week: int) -> Path:
+        return self.season_processed(season) / f"week={week:02d}.parquet"
 
     def ensure(self) -> None:
         for directory in (self.raw, self.processed, self.warehouse, self.models):
             directory.mkdir(parents=True, exist_ok=True)
+
+
+def week_key(season: int, week: int) -> str:
+    """The partition key of one NFL week, e.g. ``2026-10``; sorts in calendar order."""
+    return f"{season}-{week:02d}"
+
+
+def parse_week_key(key: str) -> tuple[int, int]:
+    """``2026-10`` -> ``(2026, 10)``."""
+    season, _, week = key.partition("-")
+    if not (season.isdigit() and week.isdigit()):
+        raise ValueError(f"not a season-week key: {key!r}")
+    return int(season), int(week)
 
 
 def data_paths(root: str | Path | None = None) -> Paths:

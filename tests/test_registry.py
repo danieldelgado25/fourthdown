@@ -8,9 +8,9 @@ import pytest
 import torch
 from typer.testing import CliRunner
 
-from fourthdown.cli import _serve_candidate, app
+from fourthdown.cli import app
 from fourthdown.data import provenance
-from fourthdown.models import features, registry, tracking
+from fourthdown.models import features, registry, release, tracking
 from fourthdown.models.card import MODEL_CARD, ModelCard
 from fourthdown.models.features import SeasonSplit
 from fourthdown.models.train import (
@@ -41,7 +41,9 @@ LEAKY = {**PASSING, "wp_auc": 0.97}  # too good: a leaked feature
 def manifest():
     return provenance.Manifest(
         processed={
-            2009: provenance.PartitionRecord(2009, "p", "a" * 64, 10, "b" * 64, "c" * 64, "t")
+            "2009-01": provenance.PartitionRecord(
+                2009, 1, "p", "a" * 64, 10, "b" * 64, "c" * 64, "t"
+            )
         }
     )
 
@@ -159,7 +161,7 @@ def test_register_needs_a_tracked_run(tmp_paths, manifest):
 
 def test_train_promotes_a_passing_candidate(tmp_paths, manifest):
     card = tracked(tmp_paths, manifest, PASSING)
-    _serve_candidate(
+    release.serve_candidate(
         card, tmp_paths, tmp_paths.models / ".candidate-0", promote="gated", track=True
     )
     assert ModelCard.load(tmp_paths.models / MODEL_CARD).registered_version == 1
@@ -167,11 +169,13 @@ def test_train_promotes_a_passing_candidate(tmp_paths, manifest):
 
 def test_train_keeps_serving_the_old_model_when_gates_fail(tmp_paths, manifest):
     good = tracked(tmp_paths, manifest, PASSING, seed=1)
-    _serve_candidate(
+    release.serve_candidate(
         good, tmp_paths, tmp_paths.models / ".candidate-1", promote="gated", track=True
     )
     bad = tracked(tmp_paths, manifest, LEAKY, seed=2)
-    _serve_candidate(bad, tmp_paths, tmp_paths.models / ".candidate-2", promote="gated", track=True)
+    release.serve_candidate(
+        bad, tmp_paths, tmp_paths.models / ".candidate-2", promote="gated", track=True
+    )
     served = ModelCard.load(tmp_paths.models / MODEL_CARD)
     assert served.registered_version == 1
     assert served.artifact_sha256 == good.artifact_sha256
@@ -182,14 +186,14 @@ def test_train_without_tracking_copies_a_passing_candidate(tmp_paths, manifest):
     candidate = tmp_paths.models / ".candidate"
     card = train_candidate(candidate, manifest, PASSING)
     card.save(candidate / MODEL_CARD)
-    _serve_candidate(card, tmp_paths, candidate, promote="gated", track=False)
+    release.serve_candidate(card, tmp_paths, candidate, promote="gated", track=False)
     assert ModelCard.load(tmp_paths.models / MODEL_CARD).registered_version is None
     assert (tmp_paths.models / WP_ARTIFACT).exists()
 
 
 def test_train_with_promote_never_serves_nothing_new(tmp_paths, manifest):
     card = tracked(tmp_paths, manifest, PASSING)
-    _serve_candidate(
+    release.serve_candidate(
         card, tmp_paths, tmp_paths.models / ".candidate-0", promote="never", track=True
     )
     assert not (tmp_paths.models / MODEL_CARD).exists()

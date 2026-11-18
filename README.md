@@ -6,9 +6,10 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 08 complete** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
-dbt (a star schema under the semantic layer, with data tests that gate every build), guarded
-text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
+**Status: phase 09 complete** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
+dbt (a star schema under the semantic layer, with data tests that gate every build), all of
+it orchestrated by Dagster as an asset graph partitioned by NFL week (a weekly schedule and
+a sensor retrain when a new week lands, incrementally), guarded text-to-SQL, hybrid (dense + lexical) retrieval over generated narratives, the three
 models (win probability, the fourth-down advisor, run/pass play call), a tool-routing
 gateway with a React dashboard over four independently deployable services, gated
 evaluation in CI, and Docker Compose and Helm deployments. Design notes and phase history
@@ -26,6 +27,7 @@ make install                 # venv + editable install with dev extras
 make build                   # download 2009-2025, transform, build the warehouse (~10 min, ~1.5 GB)
 make audit                   # regenerate docs/data_audit.md from the dbt test results
 make dbt-docs                # dbt model docs and lineage graph on http://localhost:8081
+make dagster                 # the Dagster asset graph, runs, and schedules on http://localhost:3000
 ```
 
 Then query it directly:
@@ -48,7 +50,7 @@ A single season is enough to develop against: `make build SEASONS=2024`.
 
 ## The warehouse (dbt)
 
-The Polars ETL writes one Parquet partition per season. [`dbt_project/`](dbt_project/)
+The Polars ETL writes one Parquet partition per NFL week. [`dbt_project/`](dbt_project/)
 turns those partitions into the warehouse:
 
 | layer | schema | models |
@@ -81,6 +83,49 @@ LIMIT 5;
 ```
 
 The design reasoning is in [docs/architecture.md](docs/architecture.md#the-warehouse-is-a-dbt-project-phase-08).
+
+## Orchestration (Dagster)
+
+[`src/fourthdown/orchestration/`](src/fourthdown/orchestration/) runs the whole pipeline as
+one Dagster asset graph, from the nflverse download to the evaluation scorecard:
+
+```
+raw_plays[week] -> processed_plays[week] -> dbt: staging -> core -> marts, semantic
+raw_players ---------------------------------^                         |
+                                                                       +-> narrative_index
+                                                                       +-> trained_models -> model_scorecard
+```
+
+- **Partitioned by NFL week.** Each week that has been played is a partition keyed
+  `2026-10`, and the ETL writes one Parquet file per week. A week materializes only once
+  every game the nflverse schedule lists for it has a result and appears in the
+  play-by-play. The season file is downloaded only when its ETag has changed.
+- **Incremental all the way down.** `fact_plays` is an incremental dbt model. The build
+  compares the partition hashes the live warehouse was built from with those on disk, then
+  rebuilds only the new or corrected weeks' games, on a copy of the live database. The
+  narrative index embeds only the documents it doesn't have yet. Training is skipped when
+  the last run used the same data version and settings.
+- **A weekly schedule and a new-data sensor.** On Tuesdays at 10:00 New York time,
+  September through February, the schedule registers the weeks that just finished and
+  ingests them. It also re-ingests the latest week, because nflverse corrects stats after
+  games. When a processed week is newer than the warehouse, the sensor runs `publish`:
+  dbt, the index, the retrain, and the scorecard. Promotion goes only through the
+  registry's gates.
+- **dbt models are Dagster assets** (dagster-dbt), and the 64 dbt tests are asset checks.
+  A failed test fails the run, and the live warehouse is left as it was.
+
+```bash
+fourthdown pipeline --seasons 2009-          # run the graph once: new weeks, then publish
+make dagster                                 # the UI, schedule, and sensor locally (:3000)
+make dagster-up                              # the same UI plus the daemon, in Docker
+```
+
+The first run on 2009-2026 week 9 took about 3.5 minutes: 362 week partitions, a full dbt
+build, training, and the scorecard. The next run picked up 2026 week 10 alone. It took 1.5
+seconds to ingest (a conditional download) and 0.1 seconds to transform (one new file, every
+other week's bytes untouched). The incremental dbt build ran all 64 tests, and `fact_plays`
+took 2.0 seconds instead of 6.2. Retraining took 1.6 minutes and the scorecard 6 seconds. A
+rerun with nothing new took 30 seconds and skipped training.
 
 ## Asking questions
 
@@ -305,14 +350,17 @@ containers:
 ```bash
 cp .env.example .env                         # set POSTGRES_PASSWORD
 make build train index                       # data/ on the host, or:
-make pipeline                                # download, build, train, and index in containers
+make pipeline                                # the Dagster asset graph once, in a container
 make up                                      # postgres, ollama, and the four services
+make dagster-up                              # optional: Dagster UI + daemon for weekly updates
 ```
 
 The dashboard is on http://localhost:8000. A one-shot `ollama-pull` container fetches the
 chat and embedding models into a volume; the services pick them up when the download
-finishes. `make pipeline` is a no-op when `data/` already holds a verified build of the
-same `FOURTHDOWN_SEASONS` and `FOURTHDOWN_TRAIN_ARGS`. Without Docker, run each service
+finishes. `make pipeline` runs `fourthdown pipeline`. With nothing new in nflverse, a rerun
+skips the work: no week is ingested twice, dbt has nothing to rebuild, and training is
+skipped while the data and `FOURTHDOWN_TRAIN_ARGS` are unchanged. Start `make dagster-up`
+after it finishes, not alongside it. Without Docker, run each service
 with `make serve-warehouse`, `serve-retrieval`, `serve-models`, and `serve-gateway`.
 
 The warehouse's staging views read Parquet by a path relative to the data root, so
@@ -346,14 +394,16 @@ Either way, allow about 40 GB of disk for the data, models, and images.
 
 ```bash
 alias dc='docker compose -f docker-compose.yml -f docker-compose.prod.yml'
-dc --profile pipeline pull && dc --profile pipeline up --no-build index   # once: download, train, index
+dc --profile pipeline pull && dc --profile pipeline up --no-build pipeline   # once: data, index, models
 dc --profile app pull && dc --profile app up -d --no-build
+dc --profile dagster up -d --no-build      # optional: the weekly schedule and new-data sensor
 ```
 
 The first run hands `./data` to uid 10001, the user every image runs as (the
-`data-owner` step), then builds the warehouse and trains in place. The index covers
-`FOURTHDOWN_INDEX_SEASONS` (default 2009-2025). The index step embeds only seasons not
-yet in the index (`--missing-only`), so rerunning that line after widening it is cheap.
+`data-owner` step). It then runs the Dagster asset graph once, in place: every completed
+week of `FOURTHDOWN_SEASONS` (default `2009-`, through the current season), the dbt build,
+the narratives, and training. The index step embeds only documents not yet indexed, so
+rerunning that line after a new week is cheap.
 Updating is the last line again; when a release changes the dbt models, run the first
 line too (with the app stopped), since the pipeline rebuilds them even when the data is current. `FOURTHDOWN_TAG=<commit sha>` in `.env` pins
 a release, which is also how you roll back.
@@ -466,16 +516,21 @@ The scorecard is published to the job summary. Text-to-SQL and LLM routing run i
 
 ```
 src/fourthdown/
-  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt
+  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt / pipeline
   config.py           path resolution (override the data root with FOURTHDOWN_DATA_DIR)
   data/
-    ingest.py         nflverse release downloader, incremental and resumable
+    ingest.py         nflverse downloads (conditional on the ETag) and the schedule's complete weeks
     provenance.py     per-file SHA-256, table lineage, data_version, drift checks
     schema.py         the processed column contract, including the leakage list
-    etl.py            lazy Polars pipeline -> season-partitioned Parquet
+    etl.py            lazy Polars pipeline -> week-partitioned Parquet
     modeling.py       runs dbt in-process against a data root; collects test results
-    warehouse.py      builds the warehouse with dbt and swaps it in; read-only connections
+    warehouse.py      plans a full or incremental dbt build, swaps it in; read-only connections
     audit.py          coverage tables + the last build's dbt test results
+  orchestration/
+    assets.py         the Dagster assets: ingest by week, dbt (dagster-dbt), index, train, scorecard
+    automation.py     jobs, the weekly schedule, and the sensor that publishes new data
+    partitions.py     NFL weeks as dynamic partitions, registered from the nflverse schedule
+    run.py            `fourthdown pipeline`: the graph once, in-process (compose, Helm Job)
   sql/guard.py        sqlglot validation: read-only, view whitelist, enforced LIMIT
   sql/filters.py      rerun an empty query with each WHERE condition removed
   feedback.py         the miss log: one JSON line per empty result
@@ -499,6 +554,7 @@ src/fourthdown/
     playcall.py       run-pass GBM and the team predictability index
     metrics.py        log loss, Brier, AUC, calibration error, reliability bins
     train.py          fits all three, writes artifacts and docs/model_eval.md
+    release.py        train into a candidate, register it, serve it only through the gates
     card.py           model card: artifact hash, data version, split, metrics, run id
     tracking.py       MLflow run logging (SQLite store under data/mlflow by default)
   serving/
@@ -548,10 +604,10 @@ docs/
   routing_eval.md     generated: routing accuracy, keyword vs LLM
   scorecard.md        generated: every suite against its gates
   lineage.md          generated: data version, per-table sources and hashes
-Dockerfile            one target per service, plus `pipeline` for the build/index jobs
+Dockerfile            one target per service, plus `pipeline` (Dagster: the graph, UI, daemon)
 docker/
   winprob.Dockerfile  CPU-only image with the trained model and its card baked in
-  pipeline.sh         build + train into the data volume, skipped when already current
+  dagster.yaml        the Dagster instance: storage on the data volume, one run at a time
   constraints.txt     pinned runtime versions for every image (`make constraints`)
 deploy/
   helm/fourthdown/    the chart; values-kind.yaml for a local cluster, values-ci.yaml for CI

@@ -21,7 +21,7 @@ TARGETS = $(SERVICES) pipeline
 # Credentials from .env reach helm as shell variables, so make echoes their names, not their values.
 export POSTGRES_PASSWORD FOURTHDOWN_LLM_BASE_URL FOURTHDOWN_LLM_MODEL FOURTHDOWN_LLM_API_KEY
 
-.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
+.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	dagster dagster-pipeline dagster-up 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -67,6 +67,15 @@ dbt-docs:
 verify-data:
 	fourthdown lineage --verify --output docs/lineage.md
 
+# The Dagster asset graph (fourthdown.orchestration) on http://localhost:3000, with its
+# run history in data/dagster: the same instance `make dagster-pipeline` records into.
+dagster:
+	DAGSTER_HOME="$(CURDIR)/data/dagster" dagster dev -m fourthdown.orchestration -p 3000
+
+# Run the asset graph once on the host: every completed week of SEASONS, then publish.
+dagster-pipeline:
+	fourthdown pipeline --seasons $(SEASONS)
+
 mlflow-ui:
 	mlflow ui --backend-store-uri sqlite:///data/mlflow/mlflow.db
 
@@ -102,11 +111,15 @@ up:
 	docker compose --profile app up -d --build
 
 down:
-	docker compose --profile app --profile pipeline down
+	docker compose --profile app --profile pipeline --profile dagster down
 
 # Build, train, and index into ./data inside containers instead of on the host.
 pipeline:
-	docker compose --profile pipeline up --build index
+	docker compose --profile pipeline up --build pipeline
+
+# The Dagster UI and daemon in Docker (weekly schedule + new-data sensor), on :3000.
+dagster-up:
+	docker compose --profile dagster up -d --build
 
 helm-lint:
 	helm lint $(CHART) --set postgres.password=lint

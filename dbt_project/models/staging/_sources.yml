@@ -9,7 +9,7 @@ sources:
     tables:
       - name: processed_plays
         description: >
-          The processed play table, one Parquet partition per season, written by the Polars
+          The processed play table, one Parquet partition per NFL week, written by the Polars
           ETL (fourthdown.data.etl) from nflverse's play-by-play release. Its columns are the
           contract in fourthdown.data.schema.
         meta:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 
 import polars as pl
@@ -228,3 +229,79 @@ def test_drives_scored_touchdown_ignores_opponent_return_touchdowns(raw_frame, t
             "SELECT drive_number, scored_touchdown FROM drives ORDER BY drive_number"
         ).fetchall()
     assert rows == [(1, True), (2, False), (3, False)]
+
+
+def _week(raw_frame, week, game_id):
+    return raw_frame.with_columns(
+        week=pl.lit(week, dtype=raw_frame["week"].dtype), game_id=pl.lit(game_id)
+    )
+
+
+def _fact_rows(paths):
+    with warehouse.connect(paths) as connection:
+        return connection.execute(
+            "SELECT * FROM core.fact_plays ORDER BY game_id, play_id"
+        ).fetchall()
+
+
+def test_plan_is_full_without_a_live_warehouse(raw_frame, tmp_paths):
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    assert warehouse.plan(tmp_paths) == warehouse.BuildPlan.full("no live warehouse")
+
+
+def test_a_new_week_builds_incrementally_and_matches_a_full_build(raw_frame, tmp_paths):
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    warehouse.build(tmp_paths, run_tests=False)
+    assert warehouse.plan(tmp_paths).weeks == ()
+
+    pl.concat([raw_frame, _week(raw_frame, 2, "2023_02_BBB_AAA")]).write_parquet(
+        tmp_paths.season_raw(2023)
+    )
+    etl.transform_week(2023, 2, tmp_paths)
+    planned = warehouse.plan(tmp_paths)
+    assert (planned.incremental, planned.weeks) == (True, ("2023-02",))
+    warehouse.build(tmp_paths, run_tests=False, incremental=True)
+    incremental = _fact_rows(tmp_paths)
+    assert len(incremental) == 2 * raw_frame.height
+    assert warehouse.plan(tmp_paths).weeks == ()
+
+    warehouse.build(tmp_paths, run_tests=False)
+    assert _fact_rows(tmp_paths) == incremental
+
+
+def test_a_corrected_week_replaces_its_games_including_deleted_plays(raw_frame, tmp_paths):
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    warehouse.build(tmp_paths, run_tests=False)
+    # nflverse republishes week 1 with the last play removed.
+    raw_frame.head(raw_frame.height - 1).write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_week(2023, 1, tmp_paths)
+    assert warehouse.plan(tmp_paths).weeks == ("2023-01",)
+    warehouse.build(tmp_paths, run_tests=False, incremental=True)
+    assert len(_fact_rows(tmp_paths)) == raw_frame.height - 1
+
+
+def test_changed_dbt_code_forces_a_full_build(raw_frame, tmp_paths, tmp_path, monkeypatch):
+    project = tmp_path / "dbt_project"
+    shutil.copytree(modeling.project_dir(), project)
+    monkeypatch.setenv(modeling.PROJECT_ENV, str(project))
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    warehouse.build(tmp_paths, run_tests=False)
+    fact = project / "models" / "core" / "fact_plays.sql"
+    fact.write_text(fact.read_text() + "\n-- edited\n")
+    assert warehouse.plan(tmp_paths) == warehouse.BuildPlan.full("dbt model fact_plays changed")
+
+
+def test_a_removed_partition_forces_a_full_build(raw_frame, tmp_paths):
+    pl.concat([raw_frame, _week(raw_frame, 2, "2023_02_BBB_AAA")]).write_parquet(
+        tmp_paths.season_raw(2023)
+    )
+    etl.transform_season(2023, tmp_paths)
+    warehouse.build(tmp_paths, run_tests=False)
+    raw_frame.write_parquet(tmp_paths.season_raw(2023))
+    etl.transform_season(2023, tmp_paths)
+    planned = warehouse.plan(tmp_paths)
+    assert not planned.incremental and "2023-02" in planned.reason

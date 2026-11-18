@@ -92,6 +92,10 @@ securityContext:
 {{/* Job names carry a hash of their inputs: Job specs are immutable, so a changed input
      must be a new Job, and an unchanged one must be a no-op on upgrade. */}}
 {{- define "fourthdown.pipelineJob" -}}
-{{- $inputs := printf "%s|%s|%s" .Values.pipeline.seasons .Values.pipeline.trainArgs (include "fourthdown.appImage" (dict "root" . "target" "pipeline")) -}}
+{{- $index := "no-index" -}}
+{{- if include "fourthdown.indexEnabled" . -}}
+{{- $index = printf "index=%s,%s" .Values.index.seasons .Values.llm.embedModel -}}
+{{- end -}}
+{{- $inputs := printf "%s|%s|%s|%s" .Values.pipeline.seasons .Values.pipeline.trainArgs $index (include "fourthdown.appImage" (dict "root" . "target" "pipeline")) -}}
 {{- printf "%s-pipeline-%s" (include "fourthdown.fullname" .) ($inputs | sha256sum | trunc 8) -}}
 {{- end -}}

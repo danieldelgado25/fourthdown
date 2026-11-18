@@ -1,9 +1,14 @@
 """Polars transform from a raw nflverse season file to the processed play table.
 
-The transform is a single lazy plan per season: project the columns we contracted to,
-normalise types, and derive the situational buckets that the SQL layer, the narrative
-generator, and the models all share. Deriving them once here is what keeps a bucket
-definition from drifting between a chart, a query, and a feature matrix.
+The transform is a single lazy plan: project the columns we contracted to, normalise
+types, and derive the situational buckets that the SQL layer, the narrative generator, and
+the models all share. Deriving them once here is what keeps a bucket definition from
+drifting between a chart, a query, and a feature matrix.
+
+Output is partitioned by NFL week, ``processed/plays/season=2026/week=10.parquet``, so a
+new week is one new file and every other partition keeps its bytes (and its hash in the
+provenance manifest). Every derived column is computed from its own row, so transforming
+one week of a season file gives exactly the rows transforming the whole season would.
 """
 
 from __future__ import annotations
@@ -175,20 +180,65 @@ def transform(frame: pl.LazyFrame) -> pl.LazyFrame:
     return plan.select(schema.PROCESSED_COLUMNS).sort("game_id", "play_id")
 
 
-def transform_season(season: int, paths: Paths | None = None) -> Path:
-    """Run the transform for one season and write its processed Parquet partition."""
-    resolved = paths or data_paths()
-    source = resolved.season_raw(season)
+def _source(paths: Paths, season: int) -> pl.LazyFrame:
+    source = paths.season_raw(season)
     if not source.exists():
         raise FileNotFoundError(
             f"raw season file missing: {source}. Run `fourthdown ingest` first."
         )
-    destination = resolved.season_processed(season)
+    return pl.scan_parquet(source)
+
+
+def _write(table: pl.DataFrame, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    partial = destination.with_suffix(".parquet.part")
+    table.write_parquet(partial, compression="zstd", statistics=True)
+    partial.replace(destination)
+
+
+def transform_season(season: int, paths: Paths | None = None) -> list[Path]:
+    """Transform a whole season and write one partition per week it holds.
+
+    Partitions of weeks the raw file no longer holds are removed, as is the single
+    ``plays.parquet`` per season that earlier versions wrote.
+    """
+    resolved = paths or data_paths()
     LOGGER.info("transforming season %s", season)
-    table = transform(pl.scan_parquet(source)).collect()
-    table.write_parquet(destination, compression="zstd", statistics=True)
-    provenance.record_partition(resolved, season, rows=table.height)
+    table = transform(_source(resolved, season)).collect()
+    season_dir = resolved.season_processed(season)
+    season_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    rows: dict[int, int] = {}
+    for (week,), part in table.partition_by("week", as_dict=True, maintain_order=True).items():
+        destination = resolved.week_processed(season, int(week))
+        _write(part, destination)
+        written.append(destination)
+        rows[int(week)] = part.height
+    for stale in set(season_dir.glob("*.parquet")) - set(written):
+        stale.unlink()
+    provenance.record_season_partitions(resolved, season, rows)
+    LOGGER.info("wrote %s rows in %d weekly partitions to %s", table.height, len(rows), season_dir)
+    return sorted(written)
+
+
+def transform_week(season: int, week: int, paths: Paths | None = None) -> Path:
+    """Transform one week of a season file into its partition, leaving the others alone.
+
+    Raises:
+        ValueError: the raw file has no plays for that week (not played, or not
+            published yet).
+    """
+    resolved = paths or data_paths()
+    if (resolved.season_processed(season) / "plays.parquet").exists():
+        # A season written whole by an earlier version: split it once, then go weekly.
+        LOGGER.info("season %s predates weekly partitions; splitting it", season)
+        transform_season(season, resolved)
+    table = transform(_source(resolved, season).filter(pl.col("week") == week)).collect()
+    if table.is_empty():
+        raise ValueError(f"the raw {season} file has no plays for week {week}")
+    destination = resolved.week_processed(season, week)
+    _write(table, destination)
+    provenance.record_week_partition(resolved, season, week, rows=table.height)
     LOGGER.info("wrote %s rows to %s", table.height, destination)
     return destination
 
@@ -197,4 +247,4 @@ def transform_seasons(seasons: Iterable[int], paths: Paths | None = None) -> Ite
     resolved = paths or data_paths()
     resolved.ensure()
     for season in seasons:
-        yield transform_season(season, resolved)
+        yield from transform_season(season, resolved)

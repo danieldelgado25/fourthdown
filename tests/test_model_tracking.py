@@ -25,7 +25,9 @@ STATE = {
 def manifest():
     return provenance.Manifest(
         processed={
-            2009: provenance.PartitionRecord(2009, "p", "a" * 64, 10, "b" * 64, "c" * 64, "t")
+            "2009-01": provenance.PartitionRecord(
+                2009, 1, "p", "a" * 64, 10, "b" * 64, "c" * 64, "t"
+            )
         }
     )
 

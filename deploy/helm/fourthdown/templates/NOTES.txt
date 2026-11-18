@@ -1,5 +1,5 @@
-FourthDown is starting. The pipeline Job downloads and warehouses {{ .Values.pipeline.seasons }}
-and trains the models{{ if include "fourthdown.indexEnabled" . }}, then the index Job embeds the narratives{{ end }}.
+FourthDown is starting. The pipeline Job runs the Dagster asset graph once: it downloads
+and warehouses every completed week of {{ .Values.pipeline.seasons }}{{ if include "fourthdown.indexEnabled" . }}, embeds the narratives,{{ end }} and trains the models.
 The services start right away and report readiness as the data and models appear.
 
   kubectl get jobs,pods -l app.kubernetes.io/instance={{ .Release.Name }}

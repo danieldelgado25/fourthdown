@@ -34,13 +34,15 @@ authoring, and explanation.
 ```
 data/raw/pbp/play_by_play_<season>.parquet      nflverse release, untouched
 data/raw/players.parquet                         nflverse player ids -> full names
-data/processed/plays/season=<season>/plays.parquet   projected, typed, feature-derived
+data/raw/schedules.parquet                       nflverse schedule: which weeks are over
+data/processed/plays/season=<season>/week=<ww>.parquet   projected, typed, feature-derived
 data/warehouse/fourthdown.duckdb                 built by dbt from dbt_project/
 ```
 
-One lazy Polars plan per season does projection, type normalisation, and feature
-derivation; partitions are written independently so a new season is an incremental
-`fourthdown build --seasons 2025` rather than a full rebuild.
+One lazy Polars plan does projection, type normalisation, and feature derivation. Output
+is one file per NFL week, so a new week is one new file and every other partition keeps
+its bytes and its hash. Every derived column is computed from its own row, so a week
+transformed alone matches the same week transformed with its season; a test holds that.
 
 ### The warehouse is a dbt project (phase 08)
 
@@ -116,6 +118,96 @@ container. `fourthdown dbt <command>` sets the same environment around any dbt c
 (`fourthdown dbt docs generate`, `fourthdown dbt test --select fact_plays`). CI uploads the
 generated docs site, whose lineage graph runs from the Parquet sources to the semantic
 tables.
+
+### Dagster runs the pipeline as an asset graph (phase 09)
+
+`src/fourthdown/orchestration/` replaces `docker/pipeline.sh`, a script that rebuilt
+everything unless a stamp file said the data was current. The pipeline is now one Dagster
+asset graph:
+
+```
+raw_plays[week] -> processed_plays[week] -> dbt: stg_* -> fact_plays, dim_* -> mart_*, semantic
+raw_players ---------------------------------^                                    |
+                                                         narrative_index <--------+
+                                                         trained_models -> model_scorecard
+```
+
+| asset | partitioned | what it does |
+| --- | --- | --- |
+| `raw_plays` | by week | conditional download of the season file; checks the week against the schedule |
+| `processed_plays` | by week | the Polars transform of that week, `season=S/week=WW.parquet` |
+| `raw_players` | no | nflverse's player table, refreshed so new players get full names |
+| dbt models (21) | no | `dbt build` via dagster-dbt; the 64 dbt tests are asset checks |
+| `narrative_index` | no | embeds the narratives not yet in pgvector |
+| `trained_models` | no | train, register, serve through the gates; skipped when nothing changed |
+| `model_scorecard` | no | offline suites plus the training run's metrics; a `gates_pass` check |
+
+**Partitions are weeks that have been played.** Keys are `<season>-<week>`, the same key
+the manifest and the file layout use. The set is dynamic rather than a static season x
+week grid because seasons differ in length (21 weeks through 2020, 22 since) and a week
+exists only once it is over. The nflverse schedule decides that. A week is complete when
+every game listed for it has a result, and `raw_plays` also requires every one of those
+games in the play-by-play. A week that is not ready fails with the reason, such as
+"not every game of the week has a final result yet". Every season from 2009 to 2025 was
+checked against this rule with no exceptions: cancelled games are not in the schedule.
+
+**The ingest assets are partitioned; everything downstream reads all weeks.** A model
+trains on every season, and the semantic tables span them. So dbt, the index, training,
+and the scorecard are unpartitioned assets that depend on all of `processed_plays`. The
+ingest assets take a single-run backfill policy, so a 362-week backfill is one run with one
+download per season, not 362 runs.
+
+**A new week does not rebuild what it did not change:**
+
+- *Download.* The season file is requested with `If-None-Match` and the recorded ETag.
+  An unchanged file costs one request.
+- *Transform.* Only the week's file is written. The other weeks keep their bytes, their
+  manifest records, and so their place in `data_version`.
+- *dbt.* `warehouse.plan` compares the partition hashes the live warehouse was built
+  from (`built_from` in the manifest) with those on disk. When weeks were only added or
+  changed, dbt runs on a copy of the live database, and `fact_plays` (incremental,
+  `delete+insert` keyed by `game_id`) rebuilds just those weeks' games. Overwriting by
+  game, not by play, also drops a play nflverse deleted in a correction. The dimensions,
+  mart, and semantic tables are small enough to rebuild each time. Changed dbt code, a
+  removed partition, or no live warehouse means a full build. A test holds the
+  incremental result equal to a full rebuild.
+- *Index.* Only documents whose id is not in pgvector are embedded.
+- *Training.* Retraining is inherent: the model fits on every season. It is skipped when
+  the last run, served or not, used this data version and these settings.
+
+Measured on the real data: the first run on 2009-2026 week 9 took 3.5 minutes. The next
+run added 2026 week 10 alone and took 2m17s. Ingest took 1.5 seconds, the transform 0.1
+seconds, and the incremental dbt build 6 seconds with all 64 tests (`fact_plays` 2.0
+seconds instead of 6.2). Training took 1m36s and the scorecard 6 seconds. A rerun with
+nothing new took 30 seconds and did not train.
+
+**Schedule and sensor.** `weekly_ingest` runs on Tuesdays at 10:00 New York time,
+September through February, after Monday night's game. It registers the current season's
+newly completed weeks and ingests them, plus the latest week again, since nflverse
+corrects stats in the days after a game. `new_data_sensor` compares the latest
+`processed_plays` materialization with the latest `fact_plays` materialization. When data
+is newer than the warehouse, it runs `publish` once, however many weeks landed. Its
+`run_key` is that materialization's storage id, so a failed publish is not retried on the
+same data. A retrain is promoted only through the registry gates, so a bad week cannot
+replace the served model.
+
+**dbt inside Dagster.** dagster-dbt turns each model into an asset and each test into an
+asset check, with the dbt sources mapped onto the ingest assets. The run still builds on
+a staging copy and swaps it in only when everything passed. Dagster's events are held
+until the swap, so a materialization in Dagster always describes the live warehouse. A
+failing test reports its check as failed, and the run fails while the live warehouse
+keeps serving. Selecting only part of the dbt graph is refused, because the warehouse is
+swapped in whole.
+
+**One process in Kubernetes, a daemon in Compose.** `fourthdown pipeline` runs the graph
+once, in-process: register the completed weeks, ingest the ones not processed yet, then
+`publish`. The Helm Job runs it, and so does the compose `pipeline` service. The Helm Job
+waits for Postgres and the embedding model first when the index is on. For ongoing weekly
+updates, the compose `dagster` profile adds the webserver (UI on port 3000) and the
+daemon, which runs the schedule and sensor. Both share one instance on the data volume
+(`docker/dagster.yaml`). The run queue allows one run at a time, because every run writes
+the same DuckDB file, Parquet, and MLflow registry. The cluster has no daemon. A weekly
+cluster refresh is a new pipeline Job, and that is a no-op when nothing landed.
 
 ## Query layer (built)
 
@@ -512,8 +604,8 @@ view name in the warehouse schema.
 | step | records |
 | --- | --- |
 | `ingest` | per season: source URL, SHA-256, bytes, and the ETag / Last-Modified of the download |
-| `etl` | per partition: rows, SHA-256, the SHA-256 of the raw file it came from, and a hash of `etl.py` + `schema.py` |
-| `warehouse` | per dbt model and seed: the SHA-256 of its file, its schema and materialization, and what it reads; plus one hash over the macros, seed, and `dbt_project.yml` |
+| `etl` | per weekly partition (`2026-10`): rows, SHA-256, the SHA-256 of the raw file it came from, and a hash of `etl.py` + `schema.py` |
+| `warehouse` | per dbt model and seed: the SHA-256 of its file, its schema and materialization, and what it reads; plus one hash over the macros, seed, and `dbt_project.yml`; and the partition hashes it was built from, which the next build diffs |
 
 nflverse republishes the current season's file in place, so a season number does not
 identify data; the hash does. `data_version` is a 12-character hash over the processed
@@ -579,23 +671,25 @@ the service images hold data, and each installs only its own pip extra, pinned b
 | `fourthdown-warehouse` | + DuckDB, sqlglot | stats, tendency |
 | `fourthdown-retrieval` | + psycopg | narrative |
 | `fourthdown-models` | + CPU torch, scikit-learn | advisor |
-| `fourthdown-pipeline` | every extra, typer, MLflow | the pipeline Job, the index Job, `fourthdown wait` |
+| `fourthdown-pipeline` | every extra, typer, MLflow, dbt, Dagster | the pipeline Job, the Dagster UI and daemon, `fourthdown wait` |
 | `fourthdown-winprob` | one trained model and its card (above) | the standalone model service |
 
-**Data is built where it is served.** `docker/pipeline.sh` runs `fourthdown build` and
-`fourthdown train` against the volume mounted at `/data`, and skips both when the volume
-already holds a build of the same configuration that passes `fourthdown lineage --verify`.
-The provenance checks therefore run inside the cluster too. In Compose the volume is the
+**Data is built where it is served.** The pipeline Job runs `fourthdown pipeline`, the
+Dagster asset graph, against the volume mounted at `/data`. Weeks already processed are
+not ingested again, dbt has nothing to rebuild, and training is skipped while the data
+version and training flags are unchanged. Training refuses data that fails
+`fourthdown lineage --verify`, so the provenance checks run inside the cluster too. In Compose the volume is the
 repo's `data/`, so a build on the host (`make build train`) serves just as well.
 
 **Ordering is mostly unnecessary.** The services heal in place (above), so they start
 alongside the pipeline Job and turn ready as the warehouse and models appear. Only the
-index Job needs ordering: it runs `fourthdown wait` as an init container, polling for the
-warehouse, Postgres, and the embedding model, and on timeout reports which check failed.
+narrative index needs ordering. When it is enabled, the pipeline Job runs `fourthdown
+wait` as an init container, polling for Postgres and the embedding model, and on timeout
+reports which check failed.
 
-**Jobs are named by their inputs.** A Job's spec is immutable, so the pipeline, index,
-and model-pull Jobs carry a hash of their inputs: seasons, training flags, and image for
-the pipeline; seasons, embedding model, and pipeline for the index. Changing an input
+**Jobs are named by their inputs.** A Job's spec is immutable, so the pipeline and
+model-pull Jobs carry a hash of their inputs: for the pipeline, the seasons, training
+flags, index seasons, embedding model, and image. Changing an input
 creates a new Job, and an unchanged upgrade is a no-op. A service reopens only what is
 missing, so the warehouse and models pods are annotated with the pipeline Job's name and
 a rebuild rolls them.
@@ -628,3 +722,4 @@ kind port mapping.
 | 07b | full stack in Docker Compose, Helm chart on a local kind cluster | done |
 | 07c | gateway and tool services, provider-agnostic LLM, hybrid routing | done |
 | 08 | dbt: star schema, tendency mart, data tests that gate the build, dbt docs in CI | done |
+| 09 | Dagster asset graph partitioned by NFL week, incremental dbt, weekly schedule, new-data sensor | done |

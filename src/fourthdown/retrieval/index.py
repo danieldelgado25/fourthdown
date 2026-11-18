@@ -54,20 +54,27 @@ def build(
     seasons: Iterable[int] | None = None,
     postseason_drives_only: bool = False,
     reset: bool = False,
+    missing_only: bool = False,
 ) -> IndexReport:
     """Generate, embed, and upsert every document for the requested grains and seasons.
 
     Upserts are keyed on ``doc_id``, so re-running after a new season lands adds that
-    season without touching the rest of the index.
+    season without touching the rest of the index. ``missing_only`` embeds only documents
+    whose id is not indexed yet: after a new week, that week's games and nothing else.
     """
     started = time.perf_counter()
     store.initialise(model=embedder.name, dimensions=embedder.dimensions, reset=reset)
+    indexed = store.doc_ids() if missing_only and not reset else set()
     written = 0
-    stream = documents(
-        connection,
-        grains=grains,
-        seasons=seasons,
-        postseason_drives_only=postseason_drives_only,
+    stream = (
+        document
+        for document in documents(
+            connection,
+            grains=grains,
+            seasons=seasons,
+            postseason_drives_only=postseason_drives_only,
+        )
+        if document.doc_id not in indexed
     )
     for batch in _batched(stream, ENCODE_BATCH):
         vectors = embedder.encode([document.text for document in batch])

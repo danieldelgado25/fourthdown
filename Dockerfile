@@ -3,10 +3,11 @@
 #   docker build --target warehouse -t fourthdown-warehouse .
 #   docker build --target retrieval -t fourthdown-retrieval .
 #   docker build --target models    -t fourthdown-models .
-#   docker build --target pipeline  -t fourthdown-pipeline .   # build, train, index jobs
+#   docker build --target pipeline  -t fourthdown-pipeline .   # Dagster: pipeline, UI, daemon
 # `make images` builds all five. No image holds data: the warehouse, Parquet, and models
-# live on a volume at /data, built in place by the pipeline image (docker/pipeline.sh) or
-# on the host with `make build train`. Versions are pinned by docker/constraints.txt.
+# live on a volume at /data, built in place by the pipeline image (`fourthdown pipeline`,
+# the Dagster asset graph) or on the host with `make build train`. Versions are pinned by
+# docker/constraints.txt.
 
 FROM node:20-slim AS web
 WORKDIR /web
@@ -64,6 +65,13 @@ CMD ["python", "-m", "fourthdown.services.models"]
 
 FROM torch AS pipeline
 RUN pip install -c /tmp/constraints.txt ".[pipeline]"
-COPY docker/pipeline.sh /usr/local/bin/fourthdown-pipeline
+# The Dagster instance: config in the image, storage on the data volume (/data/dagster).
+ENV DAGSTER_HOME=/opt/dagster
+COPY docker/dagster.yaml /opt/dagster/dagster.yaml
+# Parse the dbt project once, here, as root: the orchestrator loads its dbt assets from
+# the manifest, and the project directory is read-only to the app user at runtime.
+RUN python -c "from fourthdown.data import modeling; modeling.parse_manifest()"     && rm -rf /data/* /app/dbt_project/target/logs
 USER 10001
-CMD ["fourthdown-pipeline"]
+# The asset graph, once: every completed week of $FOURTHDOWN_SEASONS, then publish.
+# The compose dagster services override this to serve the UI and run the daemon.
+CMD ["sh", "-c", "fourthdown pipeline --seasons \"${FOURTHDOWN_SEASONS:-2009-}\" ${FOURTHDOWN_TRAIN_ARGS:-}"]

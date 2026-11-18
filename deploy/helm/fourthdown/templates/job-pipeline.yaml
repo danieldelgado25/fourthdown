@@ -1,3 +1,12 @@
+{{- /*
+The pipeline: `fourthdown pipeline`, which runs the Dagster asset graph once, in-process
+(fourthdown.orchestration): every completed week of .Values.pipeline.seasons, then the dbt
+build, the narrative index (when enabled), the retrain, and the scorecard. Dagster records
+the runs on the data volume (/data/dagster), so a later `dagster dev` against the same
+volume shows them. A rerun with nothing new costs a dbt build and no training.
+*/}}
+{{- $index := include "fourthdown.indexEnabled" . }}
+{{- $image := include "fourthdown.appImage" (dict "root" . "target" "pipeline") }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -13,14 +22,39 @@ spec:
     spec:
       restartPolicy: Never
       {{- include "fourthdown.appSecurity" . | nindent 6 }}
-      containers:
-        - name: pipeline
-          image: {{ include "fourthdown.appImage" (dict "root" . "target" "pipeline") }}
+      {{- if $index }}
+      # The narrative index needs Postgres and the embedding model; Ollama may still be
+      # pulling it when the Job starts.
+      initContainers:
+        - name: wait
+          image: {{ $image }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
-          command: ["fourthdown-pipeline"]
+          command: ["fourthdown", "wait", "--postgres",
+                    "--ollama-models", {{ .Values.llm.embedModel | quote }},
+                    "--timeout", {{ .Values.index.waitTimeoutSeconds | quote }}]
           envFrom:
             - configMapRef:
                 name: {{ include "fourthdown.fullname" . }}
+          env:
+            {{- include "fourthdown.secretEnv" . | nindent 12 }}
+      {{- end }}
+      containers:
+        - name: pipeline
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - >-
+              exec fourthdown pipeline --seasons "$FOURTHDOWN_SEASONS" $FOURTHDOWN_TRAIN_ARGS
+              {{- if $index }} --index-seasons "$FOURTHDOWN_INDEX_SEASONS"{{ else }} --no-index{{ end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "fourthdown.fullname" . }}
+          {{- if $index }}
+          env:
+            {{- include "fourthdown.secretEnv" . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.pipeline.resources | nindent 12 }}
           volumeMounts:

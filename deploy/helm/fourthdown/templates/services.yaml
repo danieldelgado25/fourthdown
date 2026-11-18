@@ -2,7 +2,7 @@
 One Deployment and one Service per entry in .Values.services. Tool services are ready
 when /health returns 200 (at least one tool loaded); the gateway when /api/health
 answers. Liveness is a TCP check, so a service waiting on a dependency -- the pipeline
-Job, the index, an Ollama pull -- is not restarted: it heals itself
+Job, an Ollama pull -- is not restarted: it heals itself
 (see fourthdown.services.common).
 */}}
 {{- $root := . }}

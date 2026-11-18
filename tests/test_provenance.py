@@ -18,10 +18,11 @@ def _build(raw_frame, paths, season=2023):
 
 def test_partition_records_rows_and_the_raw_file_it_came_from(raw_frame, tmp_paths):
     manifest = _build(raw_frame, tmp_paths)
-    partition = manifest.processed[2023]
+    partition = manifest.processed["2023-01"]
+    assert (partition.season, partition.week) == (2023, 1)
     assert partition.rows == raw_frame.height
     assert partition.raw_sha256 == provenance.sha256_file(tmp_paths.season_raw(2023))
-    assert partition.sha256 == provenance.sha256_file(tmp_paths.season_processed(2023))
+    assert partition.sha256 == provenance.sha256_file(tmp_paths.week_processed(2023, 1))
     assert partition.transform_sha256 == provenance.transform_sha256()
 
 
@@ -79,7 +80,7 @@ def test_an_unwritable_report_does_not_fail_a_passed_verify(raw_frame, tmp_paths
 
 def test_verify_catches_an_edited_partition(raw_frame, tmp_paths):
     _build(raw_frame, tmp_paths)
-    with tmp_paths.season_processed(2023).open("ab") as handle:
+    with tmp_paths.week_processed(2023, 1).open("ab") as handle:
         handle.write(b"tampered")
     assert any("changed since" in problem for problem in provenance.verify(tmp_paths))
 

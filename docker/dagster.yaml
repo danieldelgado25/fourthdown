@@ -1,0 +1,29 @@
+# The Dagster instance for the pipeline image ($DAGSTER_HOME=/opt/dagster). Everything it
+# stores (runs, the event log, schedules and sensor cursors, step logs) lives on the data
+# volume, so the one-shot `fourthdown pipeline`, the UI, and the daemon share one history.
+storage:
+  sqlite:
+    base_dir: /data/dagster/storage
+
+local_artifact_storage:
+  module: dagster.core.storage.root
+  class: LocalArtifactStorage
+  config:
+    base_dir: /data/dagster/artifacts
+
+compute_logs:
+  module: dagster.core.storage.local_compute_log_manager
+  class: LocalComputeLogManager
+  config:
+    base_dir: /data/dagster/logs
+
+# One run at a time: every run writes the same data volume (Parquet, the DuckDB file, the
+# MLflow registry), and the weekly ingest and the sensor's publish must not overlap.
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 1
+
+telemetry:
+  enabled: false

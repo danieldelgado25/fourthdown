@@ -6,12 +6,15 @@ Each step records what it wrote into one manifest at ``Paths.manifest``:
   ETag and Last-Modified headers when it was downloaded. nflverse republishes the
   current season's file in place, so the hash is the only way to tell two downloads of
   "2024" apart.
-* ``processed``: each season partition, its row count, its SHA-256, the hash of the raw
-  file it was derived from, and the hash of the transform code that derived it.
+* ``processed``: each weekly partition (keyed ``2026-10``, as the orchestrator keys it),
+  its row count, its SHA-256, the hash of the raw season file it was derived from, and
+  the hash of the transform code that derived it.
 * ``models``: each dbt model and seed (``dbt_project/``) the warehouse was built from: its
   file's hash, schema, materialization, and what it reads. ``project_sha256`` covers the
   rest of the project that shapes the output (macros, the seed, ``dbt_project.yml``).
 * ``players_sha256``: the nflverse player table the warehouse read, if any.
+* ``built_from``: the partition hashes the live warehouse was built from, so the next
+  build knows which weeks are new or changed (`fourthdown.data.warehouse.plan`).
 
 ``data_version`` folds the processed hashes and the dbt code into one short id.
 A training run logs it, the model card carries it, and the serving API returns it with every
@@ -29,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fourthdown import __version__
-from fourthdown.config import Paths
+from fourthdown.config import Paths, week_key
 from fourthdown.data import modeling
 from fourthdown.data.modeling import ModelRecord
 
@@ -90,6 +93,7 @@ class RawRecord:
 @dataclass(frozen=True)
 class PartitionRecord:
     season: int
+    week: int
     path: str
     sha256: str
     rows: int
@@ -101,10 +105,11 @@ class PartitionRecord:
 @dataclass
 class Manifest:
     raw: dict[int, RawRecord] = field(default_factory=dict)
-    processed: dict[int, PartitionRecord] = field(default_factory=dict)
+    processed: dict[str, PartitionRecord] = field(default_factory=dict)
     models: dict[str, ModelRecord] = field(default_factory=dict)
     project_sha256: str | None = None
     players_sha256: str | None = None
+    built_from: dict[str, str] = field(default_factory=dict)
     package_version: str = __version__
     git_commit: str | None = None
     updated_at: str | None = None
@@ -113,8 +118,8 @@ class Manifest:
     def data_version(self) -> str:
         """One id for the processed bytes plus the dbt code that shapes them into tables."""
         digest = hashlib.sha256()
-        for season in sorted(self.processed):
-            digest.update(f"{season}:{self.processed[season].sha256}\n".encode())
+        for key in sorted(self.processed):
+            digest.update(f"{key}:{self.processed[key].sha256}\n".encode())
         for name in sorted(self.models):
             digest.update(f"{name}:{self.models[name].sha256}\n".encode())
         if self.project_sha256:
@@ -123,7 +128,7 @@ class Manifest:
 
     @property
     def seasons(self) -> tuple[int, ...]:
-        return tuple(sorted(self.processed))
+        return tuple(sorted({record.season for record in self.processed.values()}))
 
     def to_json(self) -> str:
         payload = {
@@ -132,12 +137,11 @@ class Manifest:
             "git_commit": self.git_commit,
             "updated_at": self.updated_at,
             "raw": {str(season): asdict(record) for season, record in sorted(self.raw.items())},
-            "processed": {
-                str(season): asdict(record) for season, record in sorted(self.processed.items())
-            },
+            "processed": {key: asdict(record) for key, record in sorted(self.processed.items())},
             "models": {name: asdict(record) for name, record in self.models.items()},
             "project_sha256": self.project_sha256,
             "players_sha256": self.players_sha256,
+            "built_from": dict(sorted(self.built_from.items())),
         }
         return json.dumps(payload, indent=2) + "\n"
 
@@ -150,15 +154,20 @@ class Manifest:
             name: ModelRecord(**{**record, "reads": tuple(record["reads"])})
             for name, record in payload.get("models", {}).items()
         }
+        # Season-wide partitions from before weekly partitioning carry no week; they read
+        # as unrecorded, so `lineage --verify` asks for the ETL to be rerun.
+        processed = {
+            key: PartitionRecord(**record)
+            for key, record in payload.get("processed", {}).items()
+            if "week" in record
+        }
         return cls(
             raw={int(key): RawRecord(**record) for key, record in payload.get("raw", {}).items()},
-            processed={
-                int(key): PartitionRecord(**record)
-                for key, record in payload.get("processed", {}).items()
-            },
+            processed=processed,
             models=models,
             project_sha256=payload.get("project_sha256"),
             players_sha256=payload.get("players_sha256"),
+            built_from=dict(payload.get("built_from", {})),
             package_version=str(payload.get("package_version", __version__)),
             git_commit=payload.get("git_commit"),
             updated_at=payload.get("updated_at"),
@@ -218,11 +227,11 @@ def record_raw(
     return record
 
 
-def record_partition(paths: Paths, season: int, *, rows: int) -> PartitionRecord:
-    manifest = load(paths)
-    path = paths.season_processed(season)
-    record = PartitionRecord(
+def _partition_record(paths: Paths, season: int, week: int, *, rows: int) -> PartitionRecord:
+    path = paths.week_processed(season, week)
+    return PartitionRecord(
         season=season,
+        week=week,
         path=_relative(paths, path),
         sha256=sha256_file(path),
         rows=rows,
@@ -230,9 +239,28 @@ def record_partition(paths: Paths, season: int, *, rows: int) -> PartitionRecord
         transform_sha256=transform_sha256(),
         written_at=_now(),
     )
-    manifest.processed[season] = record
+
+
+def record_week_partition(paths: Paths, season: int, week: int, *, rows: int) -> PartitionRecord:
+    """Record one weekly partition the ETL just wrote."""
+    manifest = load(paths)
+    record = _partition_record(paths, season, week, rows=rows)
+    manifest.processed[week_key(season, week)] = record
     save(paths, manifest)
     return record
+
+
+def record_season_partitions(paths: Paths, season: int, rows: dict[int, int]) -> None:
+    """Record every weekly partition of a season, replacing the season's old records."""
+    manifest = load(paths)
+    manifest.processed = {
+        key: record for key, record in manifest.processed.items() if record.season != season
+    }
+    for week, count in sorted(rows.items()):
+        manifest.processed[week_key(season, week)] = _partition_record(
+            paths, season, week, rows=count
+        )
+    save(paths, manifest)
 
 
 def record_models(paths: Paths, models: Sequence[ModelRecord], *, project_sha256: str) -> Manifest:
@@ -241,8 +269,12 @@ def record_models(paths: Paths, models: Sequence[ModelRecord], *, project_sha256
     manifest.models = {model.name: model for model in models}
     manifest.project_sha256 = project_sha256
     manifest.players_sha256 = sha256_file(paths.players) if paths.players.exists() else None
-    on_disk = {season for season in manifest.processed if paths.season_processed(season).exists()}
-    manifest.processed = {season: manifest.processed[season] for season in sorted(on_disk)}
+    manifest.processed = {
+        key: record
+        for key, record in sorted(manifest.processed.items())
+        if paths.week_processed(record.season, record.week).exists()
+    }
+    manifest.built_from = {key: record.sha256 for key, record in manifest.processed.items()}
     save(paths, manifest)
     return manifest
 
@@ -260,18 +292,28 @@ def verify(paths: Paths) -> list[str]:
         elif sha256_file(path) != raw.sha256:
             problems.append(f"raw {season}: {raw.path} changed since it was recorded")
     current_transform = transform_sha256()
-    for season, partition in sorted(manifest.processed.items()):
-        path = paths.season_processed(season)
-        raw_path = paths.season_raw(season)
+    raw_hashes: dict[int, str | None] = {}
+    for key, partition in sorted(manifest.processed.items()):
+        path = paths.week_processed(partition.season, partition.week)
         if not path.exists():
-            problems.append(f"processed {season}: {partition.path} is missing")
+            problems.append(f"processed {key}: {partition.path} is missing")
             continue
         if sha256_file(path) != partition.sha256:
-            problems.append(f"processed {season}: {partition.path} changed since it was recorded")
-        if raw_path.exists() and sha256_file(raw_path) != partition.raw_sha256:
-            problems.append(f"processed {season}: built from a different raw file; rerun etl")
+            problems.append(f"processed {key}: {partition.path} changed since it was recorded")
+        if partition.season not in raw_hashes:
+            raw_path = paths.season_raw(partition.season)
+            raw_hashes[partition.season] = sha256_file(raw_path) if raw_path.exists() else None
+        current_raw = raw_hashes[partition.season]
+        if current_raw is not None and current_raw != partition.raw_sha256:
+            problems.append(f"processed {key}: built from a different raw file; rerun etl")
         if partition.transform_sha256 != current_transform:
-            problems.append(f"processed {season}: transform code changed since; rerun etl")
+            problems.append(f"processed {key}: transform code changed since; rerun etl")
+    recorded = {
+        paths.week_processed(record.season, record.week) for record in manifest.processed.values()
+    }
+    for stray in sorted(set(paths.processed.glob("season=*/*.parquet")) - recorded):
+        # dbt reads every file under processed/, so an unrecorded one is unaccounted data.
+        problems.append(f"processed: {_relative(paths, stray)} is not in the manifest; rerun etl")
     if manifest.players_sha256 and (
         not paths.players.exists() or sha256_file(paths.players) != manifest.players_sha256
     ):
@@ -302,8 +344,9 @@ def render(manifest: Manifest) -> str:
         "# Data lineage",
         "",
         f"- data version: `{manifest.data_version}`",
-        f"- seasons: {len(manifest.processed)}"
-        + (f" ({manifest.seasons[0]}-{manifest.seasons[-1]})" if manifest.seasons else ""),
+        f"- seasons: {len(manifest.seasons)}"
+        + (f" ({manifest.seasons[0]}-{manifest.seasons[-1]})" if manifest.seasons else "")
+        + f", {len(manifest.processed)} weekly partitions",
         f"- processed rows: {sum(p.rows for p in manifest.processed.values()):,}",
         f"- recorded at commit: {_short(manifest.git_commit)}",
         "",
@@ -328,14 +371,22 @@ def render(manifest: Manifest) -> str:
         "",
         "## Processed partitions (`plays`)",
         "",
-        "| season | rows | partition hash | from raw hash | transform hash |",
-        "| --- | --- | --- | --- | --- |",
+        "One Parquet file per week. Per season here; every week's own hash is in the manifest.",
+        "",
+        "| season | weeks | rows | hash of the week hashes | from raw hash | transform hash |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
-    lines += [
-        f"| {p.season} | {p.rows:,} | {_short(p.sha256)} | {_short(p.raw_sha256)} "
-        f"| {_short(p.transform_sha256)} |"
-        for p in manifest.processed.values()
-    ]
+    for season in manifest.seasons:
+        weeks = [p for _, p in sorted(manifest.processed.items()) if p.season == season]
+        combined = hashlib.sha256("".join(p.sha256 for p in weeks).encode()).hexdigest()
+        raw_hashes = {p.raw_sha256 for p in weeks}
+        transforms = {p.transform_sha256 for p in weeks}
+        lines.append(
+            f"| {season} | {len(weeks)} ({weeks[0].week}-{weeks[-1].week}) "
+            f"| {sum(p.rows for p in weeks):,} | {_short(combined)} "
+            f"| {_short(raw_hashes.pop()) if len(raw_hashes) == 1 else 'mixed'} "
+            f"| {_short(transforms.pop()) if len(transforms) == 1 else 'mixed'} |"
+        )
     lines += [
         "",
         "## Raw sources",

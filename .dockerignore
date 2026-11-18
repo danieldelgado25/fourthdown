@@ -5,11 +5,12 @@
 !README.md
 !src/
 !dbt_project/
+dbt_project/target
 !web/
 web/node_modules
 web/dist
 !docker/constraints.txt
-!docker/pipeline.sh
+!docker/dagster.yaml
 !docker/winprob-requirements.txt
 !data/models/winprob.pt
 !data/models/model_card.json

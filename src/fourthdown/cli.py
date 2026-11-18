@@ -5,9 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
-import shutil
 from contextlib import ExitStack
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -21,9 +19,8 @@ from fourthdown.config import Paths, data_paths
 from fourthdown.data import audit, etl, ingest, modeling, provenance, warehouse
 from fourthdown.evaluation import harness, retrieval_harness, routing_harness, scorecard, suites
 from fourthdown.llm import LLMError, default_client
-from fourthdown.models import fourth_down, registry, tracking, winprob
-from fourthdown.models import train as training
-from fourthdown.models.card import MODEL_CARD, ModelCard
+from fourthdown.models import fourth_down, registry, release, tracking, winprob
+from fourthdown.models.card import MODEL_CARD
 from fourthdown.models.features import DEFAULT_SPLIT, SeasonSplit
 from fourthdown.models.train import FOURTH_DOWN_ARTIFACT, WP_ARTIFACT
 from fourthdown.models.winprob import GameState, WinProbabilityModel
@@ -44,9 +41,7 @@ DEFAULT_GRAINS = ",".join(GRAINS)
 
 
 def _latest_season() -> int:
-    """Seasons are named by their September start, so the current year counts from March."""
-    now = datetime.now()
-    return now.year if now.month >= 3 else now.year - 1
+    return ingest.current_season()
 
 
 def _gate(
@@ -512,36 +507,6 @@ def lineage_cmd(
     typer.echo(f"data version {manifest.data_version}; lineage written to {output}")
 
 
-PROMOTE_MODES = ("gated", "never", "always")
-CANDIDATE_DIR = ".candidate"
-"""Where `train` writes before anything is served; under the models dir, so on one volume."""
-
-
-def _serve_candidate(
-    card: ModelCard, paths: Paths, candidate: Path, *, promote: str, track: bool
-) -> None:
-    """Register the trained candidate, and install it for serving if ``promote`` allows."""
-    failures = registry.gate_failures(card.metrics)
-    for failure in failures:
-        typer.echo(f"GATE {failure}", err=True)
-    serve = promote == "always" or (promote == "gated" and not failures)
-    if track:
-        version = registry.register(card, paths)
-        typer.echo(f"registered {registry.MODEL_NAME} version {version.version} ({version.gates})")
-        if serve:
-            registry.promote(paths, version.version, ungated=bool(failures))
-            role = "serving it, not as champion" if failures else f"now {registry.ALIAS}"
-            typer.echo(f"installed version {version.version}; {role}")
-    elif serve:
-        registry.install_unregistered(candidate, paths.models)
-        typer.echo(f"installed the untracked candidate into {paths.models}")
-    if not serve and promote != "never":
-        typer.echo(
-            f"not promoted: the models gates failed; still serving what is in {paths.models}",
-            err=True,
-        )
-
-
 @app.command("train")
 def train_cmd(
     output: Output = Path("docs/model_eval.md"),
@@ -576,69 +541,32 @@ def train_cmd(
     new registered version (`fourthdown.models.registry`) and is promoted into the served
     directory per ``--promote``; with ``--no-track`` the candidate is copied in directly.
     """
-    if promote not in PROMOTE_MODES:
-        raise typer.BadParameter(f"--promote must be one of {', '.join(PROMOTE_MODES)}")
+    if promote not in release.PROMOTE_MODES:
+        raise typer.BadParameter(f"--promote must be one of {', '.join(release.PROMOTE_MODES)}")
     _configure_logging(verbose)
-    split = _split(train_seasons, valid_seasons, test_seasons)
     paths = data_paths(data_dir)
-    problems = provenance.verify(paths)
-    if problems:
-        for problem in problems:
-            typer.echo(f"DRIFT {problem}", err=True)
-        typer.echo("data does not match data/manifest.json; rerun `fourthdown build`", err=True)
-        raise typer.Exit(code=1)
-    manifest = provenance.load(paths)
-    candidate = paths.models / CANDIDATE_DIR
-    shutil.rmtree(candidate, ignore_errors=True)
-    candidate.mkdir(parents=True)
-    with warehouse.connect(paths) as connection:
-        results = training.run(
-            connection,
-            model_dir=candidate,
-            max_epochs=epochs,
-            audit_sample=audit_sample,
-            split=split,
-        )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(training.report(results))
-    card = ModelCard.build(
-        artifact=candidate / WP_ARTIFACT,
-        manifest=manifest,
-        params=tracking.training_params(
-            SeasonSplit(
-                train=results.wp_dataset.train.seasons,
-                valid=results.wp_dataset.valid.seasons,
-                test=results.wp_dataset.test.seasons,
-            ),
+    try:
+        outcome = release.train_and_release(
+            paths,
+            report=output,
+            split=_split(train_seasons, valid_seasons, test_seasons),
             epochs=epochs,
             audit_sample=audit_sample,
-        ),
-        metrics=training.summary_metrics(results),
-    )
-    card_path = candidate / MODEL_CARD
-    if track:
-        card = tracking.log_run(
-            card,
-            paths=paths,
-            card_path=card_path,
-            manifest=manifest,
-            history=results.history,
-            artifacts=[
-                candidate / name
-                for name in (
-                    WP_ARTIFACT,
-                    training.HISTORY_ARTIFACT,
-                    training.PLAYCALL_ARTIFACT,
-                    FOURTH_DOWN_ARTIFACT,
-                )
-            ]
-            + [output],
+            track=track,
+            promote=promote,
         )
+    except release.DataDriftError as error:
+        for problem in error.problems:
+            typer.echo(f"DRIFT {problem}", err=True)
+        typer.echo("data does not match data/manifest.json; rerun `fourthdown build`", err=True)
+        raise typer.Exit(code=1) from error
+    card, results = outcome.card, outcome.results
+    if card.mlflow_run_id:
         typer.echo(f"MLflow run {card.mlflow_run_id} at {card.mlflow_tracking_uri}")
-    else:
-        card.save(card_path)
-    _serve_candidate(card, paths, candidate, promote=promote, track=track)
-    shutil.rmtree(candidate, ignore_errors=True)
+    for failure in outcome.serving.gate_failures:
+        typer.echo(f"GATE {failure}", err=True)
+    for note in outcome.serving.notes:
+        typer.echo(note, err=note.startswith("not promoted"))
     typer.echo(f"data version {card.data_version}; model card at {paths.models / MODEL_CARD}")
     typer.echo(
         f"win probability log loss {results.win_probability.log_loss:.4f} "
@@ -942,6 +870,90 @@ def registry_promote_cmd(
         f"version {version} is {registry.ALIAS}; installed into {paths.models} "
         f"(data {card.data_version}, run {card.mlflow_run_id})"
     )
+
+
+@app.command("pipeline")
+def pipeline_cmd(
+    seasons: Seasons = DEFAULT_SEASONS,
+    index: Annotated[
+        bool,
+        typer.Option(
+            "--index/--no-index",
+            help="Embed narratives into Postgres (needs Postgres and the embedding model).",
+        ),
+    ] = True,
+    index_seasons: Annotated[
+        str | None,
+        typer.Option(help="Seasons to embed narratives for; all in the warehouse by default."),
+    ] = None,
+    train_seasons: SplitSeasons = None,
+    valid_seasons: SplitSeasons = None,
+    test_seasons: SplitSeasons = None,
+    epochs: Annotated[int, typer.Option("--epochs", help="Cap on win-probability epochs.")] = 60,
+    audit_sample: Annotated[
+        int, typer.Option("--audit-sample", help="Held-out fourth downs to replay.")
+    ] = 4000,
+    promote: Annotated[
+        str, typer.Option(help="'gated' (the default), 'never', or 'always'.")
+    ] = "gated",
+    track: Annotated[bool, typer.Option("--track/--no-track", help="Log to MLflow.")] = True,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Run the Dagster asset graph once: every completed week of SEASONS, then publish.
+
+    Registers each week the nflverse schedule shows complete as a partition, ingests the
+    weeks not processed yet in one run, then builds the warehouse with dbt (incrementally
+    when only weeks were added), indexes new narratives, retrains unless the data and
+    settings are unchanged, and scores the result. What the compose `pipeline` service and
+    the Helm pipeline Job run; `make dagster` shows the same runs.
+    """
+    from dagster import DagsterInstance
+
+    from fourthdown.orchestration.run import run_pipeline
+
+    _configure_logging(verbose)
+    if promote not in release.PROMOTE_MODES:
+        raise typer.BadParameter(f"--promote must be one of {', '.join(release.PROMOTE_MODES)}")
+    split = [train_seasons, valid_seasons, test_seasons]
+    if any(split) and not all(split):
+        raise typer.BadParameter(
+            "give --train-seasons, --valid-seasons and --test-seasons together"
+        )
+    paths = data_paths(data_dir)
+    paths.ensure()
+    if not os.environ.get("DAGSTER_HOME"):
+        os.environ["DAGSTER_HOME"] = str(paths.root / "dagster")
+    Path(os.environ["DAGSTER_HOME"]).mkdir(parents=True, exist_ok=True)
+    train = {
+        "train_seasons": train_seasons,
+        "valid_seasons": valid_seasons,
+        "test_seasons": test_seasons,
+        "epochs": epochs,
+        "audit_sample": audit_sample,
+        "promote": promote,
+        "track": track,
+    }
+    wanted = ingest.parse_seasons(seasons, latest=_latest_season())
+    with DagsterInstance.get() as instance:
+        result = run_pipeline(
+            paths,
+            wanted,
+            instance=instance,
+            index=index,
+            index_seasons=index_seasons,
+            train=train,
+        )
+    if result.registered:
+        typer.echo(f"registered {len(result.registered)} new week partition(s)")
+    typer.echo(
+        f"ingested {len(result.ingested)} week(s)"
+        + (f" ({result.ingested[0]} to {result.ingested[-1]})" if result.ingested else "")
+    )
+    if not result.success:
+        typer.echo(f"the {result.failed_step} run failed; see its logs above", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"published; reports in {paths.reports}")
 
 
 @app.command()
