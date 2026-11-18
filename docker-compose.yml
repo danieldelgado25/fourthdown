@@ -159,6 +159,58 @@ services:
       postgres:
         condition: service_healthy
 
+  # Phase 12: a game replayed through Redpanda into a live win-probability feed.
+  #   docker compose --profile streaming up -d redpanda stream-scorer
+  #   docker compose --profile streaming run --rm stream-replay     # GAME=..., SPEED=...
+  #   fourthdown stream watch                                      # on the host
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.1
+    profiles: [streaming]
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "127.0.0.1:19092:19092"
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Consumes nfl.plays, publishes nfl.win_probability; offsets commit after delivery.
+  stream-scorer:
+    build: { context: ., target: pipeline }
+    profiles: [streaming]
+    environment:
+      FOURTHDOWN_KAFKA_BOOTSTRAP: redpanda:9092
+    command: ["fourthdown", "stream", "score"]
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: publish a game's plays, paced by the game clock (60: a minute per hour).
+  stream-replay:
+    build: { context: ., target: pipeline }
+    profiles: [streaming]
+    environment:
+      FOURTHDOWN_KAFKA_BOOTSTRAP: redpanda:9092
+      GAME: ${GAME:-2023_22_SF_KC}
+      SPEED: ${SPEED:-60}
+    command: ["sh", "-c", "exec fourthdown stream replay \"$${GAME}\" --speed \"$${SPEED}\""]
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: "no"
+
   warehouse:
     build: { context: ., target: warehouse }
     profiles: [app]

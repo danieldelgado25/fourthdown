@@ -35,6 +35,7 @@ from fourthdown.services import retrieval as retrieval_service
 from fourthdown.services import warehouse as warehouse_service
 from fourthdown.serving import wait as readiness
 from fourthdown.serving import winprob as wp_service
+from fourthdown.streaming.scorer import Scorer
 
 app = typer.Typer(help="FourthDown data pipeline", no_args_is_help=True)
 
@@ -629,6 +630,125 @@ def snowflake_check_cmd(data_dir: DataDir = None) -> None:
         raise typer.Exit(code=1)
     count = len(list(compiled.rglob("*.sql")))
     typer.echo(f"{count} models and tests compile for Snowflake (full and incremental)")
+
+
+stream_app = typer.Typer(
+    help="Replay a game through Redpanda into a live win-probability feed (phase 12).",
+    no_args_is_help=True,
+)
+app.add_typer(stream_app, name="stream")
+
+DEMO_GAME = "2023_22_SF_KC"
+"""Super Bowl LVIII: 25-22 Kansas City in overtime, the most volatile recent final."""
+Broker = Annotated[
+    str,
+    typer.Option(
+        "--broker",
+        envvar="FOURTHDOWN_KAFKA_BOOTSTRAP",
+        help="Redpanda/Kafka bootstrap servers.",
+    ),
+]
+Speed = Annotated[
+    float,
+    typer.Option("--speed", help="Game seconds per real second; 0 replays without pauses."),
+]
+
+
+def _scorer(paths: Paths) -> Scorer:
+    from fourthdown.serving import winprob as served
+
+    loaded = served.load(paths.models)
+    version = loaded.card.registered_version
+    return Scorer(
+        probability=loaded.model.probability,
+        model_version=f"v{version}" if version else loaded.card.data_version,
+    )
+
+
+@stream_app.command("demo")
+def stream_demo_cmd(
+    game: Annotated[str, typer.Argument(help="A game_id, e.g. 2023_22_SF_KC.")] = DEMO_GAME,
+    speed: Speed = 0.0,
+    data_dir: DataDir = None,
+) -> None:
+    """The whole path in one process, on an in-memory broker: replay, score, watch."""
+    from fourthdown.streaming import MemoryBroker, feed, replay, scorer
+    from fourthdown.streaming.events import PLAYS_TOPIC, WP_TOPIC
+
+    paths = data_paths(data_dir)
+    broker = MemoryBroker()
+    with warehouse.connect(paths) as connection:
+        events = replay.game_events(connection, game)
+    model = _scorer(paths)
+    replay.replay(broker.producer(), events, speed=speed)
+    stats = scorer.run(
+        broker.consumer([PLAYS_TOPIC], scorer.GROUP), broker.producer(), model, idle_seconds=0
+    )
+    live = feed.watch(broker.consumer([WP_TOPIC], feed.GROUP), feed.Feed(), emit=typer.echo)
+    typer.echo("")
+    typer.echo(feed.summarize(live, game).render())
+    typer.echo(f"{stats.scored} events scored, {stats.dead_lettered} dead-lettered")
+
+
+@stream_app.command("replay")
+def stream_replay_cmd(
+    game: Annotated[str, typer.Argument(help="A game_id, e.g. 2023_22_SF_KC.")] = DEMO_GAME,
+    speed: Speed = 60.0,
+    broker: Broker = "localhost:19092",
+    data_dir: DataDir = None,
+) -> None:
+    """Publish a game's plays to nfl.plays, paced by the game clock."""
+    from fourthdown.streaming import KafkaBroker, replay
+
+    with warehouse.connect(data_paths(data_dir)) as connection:
+        events = replay.game_events(connection, game)
+    count = replay.replay(KafkaBroker(broker).producer(), events, speed=speed)
+    typer.echo(f"published {count} events of {game} to nfl.plays")
+
+
+@stream_app.command("score")
+def stream_score_cmd(
+    broker: Broker = "localhost:19092",
+    idle: Annotated[
+        float | None, typer.Option("--idle", help="Stop after this many idle seconds.")
+    ] = None,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Consume nfl.plays, score each play, publish to nfl.win_probability (runs until stopped)."""
+    from fourthdown.streaming import KafkaBroker, scorer
+    from fourthdown.streaming.events import PLAYS_TOPIC
+
+    _configure_logging(verbose)
+    kafka = KafkaBroker(broker)
+    stats = scorer.run(
+        kafka.consumer([PLAYS_TOPIC], scorer.GROUP),
+        kafka.producer(),
+        _scorer(data_paths(data_dir)),
+        idle_seconds=idle,
+    )
+    typer.echo(f"{stats.scored} events scored, {stats.dead_lettered} dead-lettered")
+
+
+@stream_app.command("watch")
+def stream_watch_cmd(
+    game: Annotated[
+        str | None, typer.Option("--game", help="Summarize this game when it ends.")
+    ] = None,
+    broker: Broker = "localhost:19092",
+) -> None:
+    """Print nfl.win_probability as it arrives, until a game ends."""
+    import uuid
+
+    from fourthdown.streaming import KafkaBroker, feed
+    from fourthdown.streaming.events import WP_TOPIC
+
+    # A fresh group each time, so every watcher sees the whole game from the start.
+    consumer = KafkaBroker(broker).consumer([WP_TOPIC], f"{feed.GROUP}-{uuid.uuid4().hex[:8]}")
+    live = feed.watch(consumer, feed.Feed(), emit=typer.echo)
+    for game_id in [game] if game else list(live.games):
+        typer.echo("")
+        typer.echo(feed.summarize(live, game_id).render())
 
 
 @app.command("lineage")

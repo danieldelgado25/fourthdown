@@ -370,6 +370,48 @@ them. `deploy/snowflake/setup.sql` creates a role that can only create databases
 owns, and can swap, what it builds), an XSMALL warehouse suspended after 60 seconds, a
 10-credit resource monitor, and a key-pair-only service user.
 
+### A game replayed as a stream (phase 12)
+
+`fourthdown.streaming` turns a finished game into a live one: the warehouse's plays are
+published to Redpanda one at a time, scored as they arrive, and printed as a feed. It
+reuses the served win-probability model (`serving.winprob.load`, with its provenance
+check), so the number in the feed is the one the API would give.
+
+**Topics and keys.** `nfl.plays` carries the pre-snap situation of each scrimmage play
+and a final event with the score. `nfl.win_probability` carries the home team's chance
+after each. Both are keyed by `game_id`, so a game's events share a partition and arrive
+in order, and the topics scale by partition count, one game per key. Messages are JSON
+with a schema version (`v`). The consumer refuses a version it doesn't know rather than
+guessing.
+
+**Delivery.** The scorer commits an offset only after the result for that message has
+been flushed downstream. A crash between the two rescores the play: at least once. The
+producer is idempotent with `acks=all`, so a retry doesn't duplicate. The feed keys
+results by play, so a rescored play overwrites its first result: effectively once from
+end to end. A message that can't be decoded goes to `nfl.plays.dlq` with the reason and
+its offset, and is committed, so one bad message can't stall the partition behind it.
+`tests/test_streaming.py` covers all three:
+
+- it kills the scorer mid-game, checks the committed offset, and checks that a
+  replacement in the same consumer group picks up at the right play;
+- it delivers a duplicate result and checks the feed holds one point;
+- it puts garbage ahead of a game and checks the game still scores.
+
+**Pacing and attribution.** The replay waits for the game-clock time between plays,
+divided by `--speed`. The wait is capped at 5 seconds so halftime doesn't stall a demo.
+Overtime's clock reset counts as no time. Each result is the situation *after* a play, so
+its change in win probability belongs to the play before it, and the feed says so ("after
+..."). Crediting the swing to the play about to be run is the off-by-one a first version
+here made.
+
+**The broker is swappable.** `MemoryBroker` implements the same producer and consumer
+interface as the Kafka adapter, including consumer groups and committed offsets. So the
+unit tests and `fourthdown stream demo` run the whole path without Docker, and the
+Redpanda services in Compose run the same code. On Super Bowl LVIII, the 176 plays
+produce 15 changes of favourite. The model's chance differs from nflfastR's by 9.6 points
+on average. That gap is expected: this model uses the closing spread, which nflfastR's
+`wp` does not, and it was trained on 2009-2018 only.
+
 ## Query layer (built)
 
 ```
@@ -886,3 +928,4 @@ kind port mapping.
 | 09 | Dagster asset graph partitioned by NFL week, incremental dbt, weekly schedule, new-data sensor | done |
 | 10 | Pandera contracts at ingest, row-count drift, quarantine, a leakage contract that blocks training, freshness alerts | done |
 | 11 | the same dbt project on Snowflake: incremental load, clone-and-swap build, parity with DuckDB, offline compile in CI | built; live run pending |
+| 12 | a game replayed through Redpanda into a live win-probability feed: keyed topics, at-least-once scoring, dead letters | built; Redpanda run pending |
