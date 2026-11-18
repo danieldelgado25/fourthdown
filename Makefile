@@ -21,7 +21,7 @@ TARGETS = $(SERVICES) pipeline
 # Credentials from .env reach helm as shell variables, so make echoes their names, not their values.
 export POSTGRES_PASSWORD FOURTHDOWN_LLM_BASE_URL FOURTHDOWN_LLM_MODEL FOURTHDOWN_LLM_API_KEY
 
-.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	dagster dagster-pipeline dagster-up 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
+.PHONY: install format lint typecheck test ingest etl warehouse build audit index train 	dagster dagster-pipeline dagster-up snowflake-check snowflake-build snowflake-parity 	eval-routing scorecard scorecard-ci lineage verify-data dbt-docs mlflow-ui wp-image wp-run 	images constraints up down pipeline helm-lint kind-up kind-load k8s-deploy k8s-test 	kind-down web-install web web-test clean
 
 install:
 	python -m pip install -e ".[dev]"
@@ -75,6 +75,16 @@ dagster:
 # Run the asset graph once on the host: every completed week of SEASONS, then publish.
 dagster-pipeline:
 	fourthdown pipeline --seasons $(SEASONS)
+
+# Snowflake (phase 11): the same dbt project in a second engine. `check` needs no account.
+snowflake-check:
+	fourthdown snowflake check
+
+snowflake-build:
+	fourthdown snowflake build
+
+snowflake-parity:
+	fourthdown snowflake parity --output docs/snowflake_parity.md
 
 mlflow-ui:
 	mlflow ui --backend-store-uri sqlite:///data/mlflow/mlflow.db

@@ -180,7 +180,13 @@ def dbt_cmd(ctx: typer.Context, data_dir: DataDir = None) -> None:
     if not ctx.args:
         typer.echo("usage: fourthdown dbt <dbt command> [options]", err=True)
         raise typer.Exit(code=2)
-    result = modeling.invoke(data_paths(data_dir), ctx.args)
+    # `--target prod` (Snowflake) keeps its artifacts apart from the DuckDB build's manifest.
+    args = list(ctx.args)
+    target = next(
+        (args[i + 1] for i, arg in enumerate(args[:-1]) if arg in {"--target", "-t"}),
+        next((arg.split("=", 1)[1] for arg in args if arg.startswith("--target=")), None),
+    )
+    result = modeling.invoke(data_paths(data_dir), args, target=target or modeling.DEFAULT_TARGET)
     raise typer.Exit(code=0 if result.success else 1)
 
 
@@ -547,6 +553,82 @@ def quality_cmd(
     if problems:
         raise typer.Exit(code=1)
     typer.echo("every data contract holds")
+
+
+snowflake_app = typer.Typer(
+    help="Build the same dbt project in Snowflake (phase 11); DuckDB stays the default.",
+    no_args_is_help=True,
+)
+app.add_typer(snowflake_app, name="snowflake")
+
+
+@snowflake_app.command("build")
+def snowflake_build_cmd(
+    full_refresh: Annotated[
+        bool, typer.Option("--full-refresh", help="Start from an empty database.")
+    ] = False,
+    run_tests: Annotated[bool, typer.Option("--tests/--no-tests")] = True,
+    data_dir: DataDir = None,
+    verbose: Verbose = False,
+) -> None:
+    """Load new or changed weeks into Snowflake and dbt build there, in a clone of the live
+    database that is swapped in only if every data test passed."""
+    from fourthdown.data import snowflake
+
+    _configure_logging(verbose)
+    settings = snowflake.Settings.from_env()
+    if not settings.configured:
+        typer.echo("Snowflake is not configured; set " + ", ".join(settings.missing()), err=True)
+        raise typer.Exit(code=2)
+    try:
+        result = snowflake.build(
+            data_paths(data_dir), settings, full_refresh=full_refresh, run_tests=run_tests
+        )
+    except (snowflake.SnowflakeError, modeling.DbtError) as error:
+        typer.echo(f"{error}\nThe live Snowflake database was left as it was.", err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(result.summary())
+
+
+@snowflake_app.command("parity")
+def snowflake_parity_cmd(
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Also write the table as Markdown here.")
+    ] = None,
+    data_dir: DataDir = None,
+) -> None:
+    """Compare the Snowflake build with the DuckDB one, measure by measure."""
+    from fourthdown.data import snowflake
+
+    rows = snowflake.compare(data_paths(data_dir))
+    table = snowflake.render_parity(rows)
+    typer.echo(table)
+    if output:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(table + "\n")
+    differing = [row for row in rows if not row.matches]
+    if differing:
+        typer.echo(f"{len(differing)} of {len(rows)} measures differ", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"all {len(rows)} measures match")
+
+
+@snowflake_app.command("check")
+def snowflake_check_cmd(data_dir: DataDir = None) -> None:
+    """Compile every model and test for Snowflake without an account, and check the SQL."""
+    from fourthdown.data import snowflake
+
+    paths = data_paths(data_dir)
+    problems: list[str] = []
+    for weeks in (None, ["2026-01"]):
+        compiled, found = snowflake.compile_offline(paths, weeks=weeks)
+        problems += found
+    for problem in problems:
+        typer.echo(f"FAIL {problem}", err=True)
+    if problems:
+        raise typer.Exit(code=1)
+    count = len(list(compiled.rglob("*.sql")))
+    typer.echo(f"{count} models and tests compile for Snowflake (full and incremental)")
 
 
 @app.command("lineage")

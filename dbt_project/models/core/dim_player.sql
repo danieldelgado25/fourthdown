@@ -15,14 +15,30 @@ with credited as (
     where receiver_player_id is not null
 ),
 
+name_uses as (
+    select player_id, player_name, count(*) as uses
+    from credited
+    where player_name is not null
+    group by player_id, player_name
+),
+
+short_names as (
+    -- The abbreviated name the play-by-play uses most often for this id. A tie goes to the
+    -- alphabetically first spelling, so every engine and every build order picks the same
+    -- one (mode() leaves ties to the engine).
+    select player_id, player_name as short_name
+    from name_uses
+    qualify row_number() over (partition by player_id order by uses desc, player_name) = 1
+),
+
 play_by_play as (
     select
-        player_id,
-        -- The abbreviated name the play-by-play uses most often for this id.
-        mode(player_name) as short_name,
+        credited.player_id,
+        any_value(short_names.short_name) as short_name,
         count(*) as credited_plays
     from credited
-    group by player_id
+    left join short_names on credited.player_id = short_names.player_id
+    group by credited.player_id
 )
 
 select

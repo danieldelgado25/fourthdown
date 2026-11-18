@@ -6,12 +6,17 @@
     raw_players ----------------------------------^          |
                                                              +-> narrative_index
                                                              +-> trained_models -> model_scorecard
+                                                             +-> snowflake_warehouse
 
 ``raw_plays`` and ``processed_plays`` are partitioned by NFL week; everything from dbt down
 is one unpartitioned graph that reads every week. A new week therefore costs one
 conditional download, one week's transform, an incremental dbt build (``fact_plays``
 rebuilds only that week's games), embeddings for that week's narratives only, and the
 retrain, which by its nature fits on every season.
+
+``snowflake_warehouse`` builds the same dbt project in Snowflake from the same partitions,
+after the DuckDB build has passed its tests (phase 11; its own job and sensor, which stay
+off until ``SNOWFLAKE_*`` is configured).
 """
 
 import shutil
@@ -617,6 +622,41 @@ def model_scorecard(data: DataRoot, config: ScorecardConfig) -> Iterator[Any]:
     )
 
 
+# --- Snowflake: the same dbt project on a second engine -------------------------------------
+
+
+@asset(deps=[AssetKey("plays")], group_name="snowflake", kinds={"snowflake", "dbt"})
+def snowflake_warehouse(data: DataRoot) -> MaterializeResult:
+    """The dbt project built in Snowflake: new or changed weeks loaded, an incremental
+    build in a zero-copy clone, swapped in only if every data test passed
+    (``fourthdown.data.snowflake``). Runs after the DuckDB build, so Snowflake only ever
+    receives weeks that already passed every contract and test."""
+    from fourthdown.data import snowflake
+
+    settings = snowflake.Settings.from_env()
+    if not settings.configured:
+        raise Failure(
+            description="Snowflake is not configured; set " + ", ".join(settings.missing())
+        )
+    try:
+        result = snowflake.build(data.paths(), settings)
+    except (snowflake.SnowflakeError, modeling.DbtError) as error:
+        raise Failure(
+            description=f"{error}\nThe live Snowflake database was left as it was."
+        ) from error
+    return MaterializeResult(
+        metadata={
+            "database": result.database,
+            "dbt_build": result.dbt,
+            "reason": result.reason,
+            "weeks_loaded": ", ".join(result.weeks_loaded) or "none",
+            "rows_loaded": result.rows_loaded,
+            "tests_passed": result.tests_passed,
+            "seconds": result.seconds,
+        }
+    )
+
+
 CHECKS = [leakage_contract, fresh_in_season]
 
 ASSETS = [
@@ -627,4 +667,5 @@ ASSETS = [
     narrative_index,
     trained_models,
     model_scorecard,
+    snowflake_warehouse,
 ]

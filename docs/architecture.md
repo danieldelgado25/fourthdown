@@ -87,10 +87,9 @@ scored against the holdout set like any other prompt change. The remodel reprodu
 six relations row for row on 2009-2025; one `team_game` average differs in its 17th
 significant digit, from summation order.
 
-**`core` and `marts` are written to be portable.** They use `count_if`, `CASE`,
-`* EXCLUDE`, and `mode()` rather than DuckDB's `FILTER` and `::` casts, so a second
-target (Snowflake) can build them unchanged. The semantic models keep DuckDB SQL, because
-they exist for a DuckDB-only consumer.
+**Every model is written to be portable.** They use `count_if`, `CASE` inside
+aggregates, `min_by`/`max_by`, `QUALIFY`, and `* EXCLUDE`, which DuckDB and Snowflake
+share, so a second target builds them unchanged (phase 11, below).
 
 **Data tests gate the build.** The checks that used to be Python in `audit.py` are now 64
 dbt tests:
@@ -273,6 +272,103 @@ overtime (2025 week 20, BUF at DEN). The ETL now floors it at 0, which changed t
 partition. When nflverse's real 2026 file was republished with one week-10 game cut to 40
 plays, the run failed on both row-count checks, quarantined the download, and left the
 previous file, the week's partition, and the live warehouse as they were.
+
+### The same dbt project builds in Snowflake (phase 11)
+
+DuckDB remains the warehouse every service reads: it is a file, it costs nothing, and the
+data fits in memory. Snowflake is a second target for the same project, to show the
+modelling isn't tied to one engine. `fourthdown.data.snowflake` does three things.
+
+**Load what changed.** Snowflake can't read the data root, so the processed partitions are
+PUT to an internal stage and COPY'd into `NFLVERSE.PROCESSED_PLAYS`. That table's columns
+and types come from the processed contract (`schema.INT_COLUMNS` and the rest), so a
+contract change recreates it and reloads every week. `NFLVERSE.LOAD_STATE` records each
+week's partition hash. A build loads only weeks whose hash differs, deletes weeks no longer
+on disk, and checks every file's loaded row count against the count the ETL recorded. dbt
+reads it through the same `nflverse` source the DuckDB build reads Parquet through.
+dbt-duckdb uses the source's `external_location`; on Snowflake the source is the table.
+
+**Build in a clone, swap when it passed.** `CREATE DATABASE FOURTHDOWN_BUILDING CLONE
+FOURTHDOWN` is metadata only, so a clone of any size takes seconds. The load and the dbt
+build happen there. When every data test passed, `ALTER DATABASE FOURTHDOWN SWAP WITH
+FOURTHDOWN_BUILDING` exchanges the two atomically and the old one is dropped. A failure
+anywhere drops the clone. This is the DuckDB build's staging-file-and-rename in Snowflake's
+terms, with the same guarantee: readers see the last good build or the next good build,
+never a partial one. dbt runs incrementally (only the loaded weeks' games, as on DuckDB)
+unless the database is new, a week was removed, or the dbt project's fingerprint differs
+from the one recorded with the last build.
+
+The swap is why `macros/relations.sql` overrides `ref()` and `source()` on Snowflake to
+render without a database: `core.fact_plays`, not `FOURTHDOWN_BUILDING.core.fact_plays`. A
+view keeps its SQL text through the swap, so a three-part name would point at the clone,
+which is dropped after the swap. Snowflake resolves a two-part name in a view against the
+view's own database, the live one once swapped. DuckDB keeps dbt's default, since its build
+swaps files and DuckDB names the catalog after the file.
+
+**Portable SQL, proven on both sides.** The models used three DuckDB-only constructs:
+aggregate `FILTER (WHERE ...)` (now `count_if` or a `CASE` inside the aggregate) and
+`arg_min`/`arg_max` (now `min_by`/`max_by`). Everything else they use (`any_value`, `mode`,
+`count_if`, `group by all`, `select * exclude`, `::` casts) both engines share. Two checks
+back this:
+
+- On DuckDB, a full build from the old project and one from the new are bit-identical in
+  every table and view (`hash` over each row, all 15 relations).
+- For Snowflake, `snowflake.compile_offline` renders all 78 models and tests with no
+  account. It stands in for the one catalog query dbt makes while compiling, the existence
+  check behind `is_incremental()`, so both the full and the incremental `fact_plays`
+  render. The check then fails on SQL sqlglot's Snowflake parser rejects, on a known
+  DuckDB-only function, or on a reference that names its database. It runs in CI with the
+  rest of the tests.
+
+`snowflake.parity` compares the two warehouses on 18 measures. Row counts must match
+exactly. Sums and means match to a relative 1e-6, because Snowflake averages integers as
+fixed-point decimals and the engines sum in different orders. Text has to agree too:
+`dim_player.short_name` was the `mode()` of a player's abbreviated names, which leaves a
+tie between two spellings to the engine (and to DuckDB's build order). It now breaks ties
+alphabetically, so it is deterministic everywhere, and the parity check counts its
+distinct values.
+
+**Cost and performance: why DuckDB stays the default.** The trade-offs at this
+project's size, and where they would flip:
+
+| | DuckDB (`dev`) | Snowflake (`prod`) |
+| --- | --- | --- |
+| data | 94 MB of Parquet (816,856 plays), a 157 MB database file | the same rows in compressed micro-partitions; storage cost is negligible at this size |
+| full build | 24 s on a laptop, all 78 models and tests | an XSMALL warehouse, estimated at a few minutes, mostly fixed per-statement latency at this size |
+| weekly build | seconds: about 280 KB of Parquet, one week's games rebuilt | about a minute of XSMALL: PUT and COPY one file, then the same incremental dbt |
+| compute cost | nothing beyond the machine | XSMALL is 1 credit an hour, billed per second with a 60-second minimum each time it resumes; with `AUTO_SUSPEND = 60`, a weekly build costs a few cents of credits |
+| query latency | milliseconds, in-process, nothing to resume | a suspended warehouse resumes in about a second before the first query; then the result cache serves repeats |
+| concurrency | one writer per file; readers take a read-only lock (the swap makes this work) | many readers and writers, isolated per warehouse |
+| failure safety | build beside the live file, rename when it passes | build in a zero-copy clone, `SWAP WITH` when it passes; one day of Time Travel to `UNDROP` the previous build |
+
+At under 100 MB, DuckDB wins on every axis that matters here: zero cost, lower latency, no
+network. Each of these would move the warehouse to Snowflake:
+
+- **Data beyond one machine's memory.** For example, tracking data, which is about 10
+  frames a second for every player on every play, so orders of magnitude more rows.
+- **Several teams querying concurrently**, with their own warehouses and access control.
+- **Other tools reading the same tables** (BI dashboards, notebooks) without copying a file
+  around.
+
+Three choices keep the Snowflake side cheap:
+
+- **Transient databases.** Every row can be rebuilt from the Parquet, so Fail-safe's seven
+  days of extra storage would buy nothing.
+- **An XSMALL warehouse that suspends after 60 seconds**, behind a 10-credit resource
+  monitor (`deploy/snowflake/setup.sql`).
+- **Incremental loads.** A week moves about 280 KB instead of re-uploading 94 MB.
+
+The table's Snowflake timings are estimates until the first live run;
+`snowflake_build.json` records the measured ones.
+
+**Orchestration and access.** In Dagster, `snowflake_warehouse` depends on `plays`, so it
+runs only after the DuckDB build passed. That means Snowflake only receives weeks that met
+every contract and test. It has its own `publish_snowflake` job and sensor, and the sensor
+is off unless `SNOWFLAKE_*` is configured. Credentials come from the environment only. The
+default is key-pair auth (a file path on the CLI, PEM text in containers), and nothing logs
+them. `deploy/snowflake/setup.sql` creates a role that can only create databases (so it
+owns, and can swap, what it builds), an XSMALL warehouse suspended after 60 seconds, a
+10-credit resource monitor, and a key-pair-only service user.
 
 ## Query layer (built)
 
@@ -789,3 +885,4 @@ kind port mapping.
 | 08 | dbt: star schema, tendency mart, data tests that gate the build, dbt docs in CI | done |
 | 09 | Dagster asset graph partitioned by NFL week, incremental dbt, weekly schedule, new-data sensor | done |
 | 10 | Pandera contracts at ingest, row-count drift, quarantine, a leakage contract that blocks training, freshness alerts | done |
+| 11 | the same dbt project on Snowflake: incremental load, clone-and-swap build, parity with DuckDB, offline compile in CI | built; live run pending |

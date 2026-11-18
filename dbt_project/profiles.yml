@@ -1,6 +1,10 @@
 # Paths come from the environment, which fourthdown.data.modeling sets before every dbt
 # invocation (`fourthdown dbt ...` wraps the dbt CLI the same way), so one profile serves
 # the laptop, the container's /data volume, and pytest's temporary directories.
+#
+# Two targets build the same models: `dev` (DuckDB, the default, what the services read)
+# and `prod` (Snowflake; fourthdown.data.snowflake loads the processed Parquet into it
+# first). `fourthdown dbt build --target prod` builds straight into the live database.
 fourthdown:
   target: "{{ env_var('FOURTHDOWN_DBT_TARGET', 'dev') }}"
   outputs:
@@ -13,3 +17,25 @@ fourthdown:
         # The staging views read Parquet by a path relative to the data root, so the
         # database keeps working when the root is mounted somewhere else.
         file_search_path: "{{ env_var('FOURTHDOWN_DATA_DIR') }}"
+
+    prod:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', '') }}"
+      # Key-pair authentication (Snowflake is retiring single-factor passwords for users);
+      # SNOWFLAKE_PASSWORD still works for an account that allows it. Never in this file.
+      # The key as a file (SNOWFLAKE_PRIVATE_KEY_PATH) or as PEM text (SNOWFLAKE_PRIVATE_KEY,
+      # for containers); set one.
+      private_key_path: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PATH', '') }}"
+      private_key: "{{ env_var('SNOWFLAKE_PRIVATE_KEY', '') }}"
+      private_key_passphrase: "{{ env_var('SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', '') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'FOURTHDOWN') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'FOURTHDOWN_WH') }}"
+      # The live database, unless fourthdown.data.snowflake points a build at its zero-copy
+      # clone, swapped in only when every data test passed (the DuckDB build's staging file).
+      database: "{{ env_var('FOURTHDOWN_SNOWFLAKE_DATABASE', env_var('SNOWFLAKE_DATABASE', 'FOURTHDOWN')) }}"
+      schema: main
+      threads: 8
+      query_tag: fourthdown-dbt
+      client_session_keep_alive: false

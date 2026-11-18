@@ -39,6 +39,7 @@ dbt-core-experimental-parser==2.0.11
 dbt-duckdb==1.11.1
 dbt-extractor==0.6.0
 dbt-protos==1.0.615
+dbt-snowflake==1.12.5
 deepdiff==8.6.2
 docker==7.2.0
 docstring_parser==0.18.0
@@ -119,6 +120,7 @@ pycparser==3.12
 pydantic==2.14.1
 pydantic_core==2.50.1
 Pygments==2.21.0
+pyOpenSSL==26.4.0
 pyparsing==3.3.3
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.4
@@ -138,6 +140,7 @@ shellingham==1.5.4
 six==1.17.0
 skops==0.16.0
 smmap==5.0.3
+snowflake-connector-python==5.2.0
 snowplow-tracker==1.1.0
 SQLAlchemy==2.1.6
 sqlglot==30.24.0

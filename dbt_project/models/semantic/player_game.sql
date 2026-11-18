@@ -20,7 +20,7 @@ roles as (
         posteam as team, 'passer' as role,
         passer_player_id as player_id, passer_player_name as player_name,
         count(*) as plays,
-        coalesce(sum(yards_gained) filter (where not coalesce(sack, false)), 0) as yards,
+        coalesce(sum(case when not coalesce(sack, false) then yards_gained end), 0) as yards,
         sum(coalesce(pass_touchdown, false)::int) as touchdowns,
         sum(coalesce(complete_pass, false)::int) as completions,
         avg(epa) as epa_per_play,

@@ -18,15 +18,17 @@ from fourthdown.orchestration.automation import (
     new_data_sensor,
     publish_job,
     publish_without_index_job,
+    snowflake_job,
+    snowflake_sensor,
     weekly_ingest,
 )
 
 defs = Definitions(
     assets=ASSETS,
     asset_checks=CHECKS,
-    jobs=[ingest_job, publish_job, publish_without_index_job, freshness_job],
+    jobs=[ingest_job, publish_job, publish_without_index_job, snowflake_job, freshness_job],
     schedules=[weekly_ingest, daily_freshness],
-    sensors=[new_data_sensor, alert_on_failure],
+    sensors=[new_data_sensor, snowflake_sensor, alert_on_failure],
     resources={"data": DataRoot(), "dbt": dbt_resource()},
 )
 

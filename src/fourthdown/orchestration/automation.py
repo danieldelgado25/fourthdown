@@ -11,6 +11,8 @@
   ``publish``. Several weeks landing together (a backfill) make one publish run.
 * ``daily_freshness`` (noon New York time, September through February): the
   ``fresh_in_season`` check, which alerts when a finished week is not in the data.
+* ``snowflake_sensor``: when the DuckDB warehouse is newer than the Snowflake build, runs
+  ``publish_snowflake`` (phase 11). Off unless ``SNOWFLAKE_*`` is configured.
 * ``alert_on_failure``: any failed run (a week that fails its data contract, a dbt test, the
   leakage contract) goes to ``fourthdown.quality.alerts`` with the failing steps' errors.
 
@@ -38,7 +40,7 @@ from dagster import (
 )
 
 from fourthdown.config import data_paths
-from fourthdown.data import ingest
+from fourthdown.data import ingest, snowflake
 from fourthdown.orchestration import partitions
 from fourthdown.orchestration.assets import (
     fresh_in_season,
@@ -47,6 +49,7 @@ from fourthdown.orchestration.assets import (
     processed_plays,
     raw_players,
     raw_plays,
+    snowflake_warehouse,
     trained_models,
     warehouse_models,
 )
@@ -73,6 +76,12 @@ publish_without_index_job = define_asset_job(
     "publish_without_index",
     selection=WAREHOUSE | MODELS,
     description="`publish` for deployments with no Postgres or embedding model.",
+)
+
+snowflake_job = define_asset_job(
+    "publish_snowflake",
+    selection=AssetSelection.assets(snowflake_warehouse),
+    description="Load new weeks into Snowflake and build the same dbt project there.",
 )
 
 freshness_job = define_asset_job(
@@ -129,6 +138,25 @@ def _latest(instance: DagsterInstance, key: AssetKey) -> int | None:
     """The event-log position of the asset's latest materialization (any partition)."""
     records = instance.fetch_materializations(key, limit=1).records
     return records[0].storage_id if records else None
+
+
+@sensor(
+    job=snowflake_job,
+    minimum_interval_seconds=300,
+    default_status=(
+        DefaultSensorStatus.RUNNING
+        if snowflake.Settings.from_env().configured
+        else DefaultSensorStatus.STOPPED
+    ),
+)
+def snowflake_sensor(context: SensorEvaluationContext) -> RunRequest | SkipReason:
+    built = _latest(context.instance, BUILT)
+    if built is None:
+        return SkipReason("the DuckDB warehouse has not been built yet")
+    mirrored = _latest(context.instance, snowflake_warehouse.key)
+    if mirrored is not None and mirrored > built:
+        return SkipReason("Snowflake was built after the latest DuckDB build")
+    return RunRequest(run_key=f"snowflake-{built}")
 
 
 @schedule(

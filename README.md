@@ -6,7 +6,8 @@ Ask it a number and it writes SQL. Ask it what happened and it retrieves narrati
 whether to go for it on fourth down and it calls a win-probability model. The LLM routes
 and explains; it never does the arithmetic.
 
-**Status: phase 10 complete** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
+**Status: phase 10 complete; phase 11 (Snowflake) built and checked offline, its live run
+pending** — ingestion, a Polars ETL, a DuckDB warehouse modelled in
 dbt (a star schema under the semantic layer, with data tests that gate every build), all of
 it orchestrated by Dagster as an asset graph partitioned by NFL week (a weekly schedule and
 a sensor retrain when a new week lands, incrementally), Pandera contracts and row-count
@@ -169,6 +170,42 @@ row_counts:
   - 2026-10: 2,292 plays, -5.4% against the 2,424 ingested before; a correction moves a
     week by a handful of plays, not 5%
 ```
+
+## Snowflake (the same dbt project, a second engine)
+
+DuckDB stays the warehouse the services read. The same dbt project also builds in Snowflake
+([`src/fourthdown/data/snowflake.py`](src/fourthdown/data/snowflake.py)), with no model
+written twice:
+
+1. **Load.** The weekly Parquet partitions are PUT to an internal stage and COPY'd into
+   `NFLVERSE.PROCESSED_PLAYS`, a table typed from the processed contract. Only weeks whose
+   hash differs from the last load go up, and each file's loaded row count must equal what
+   the ETL wrote.
+2. **Build.** `dbt build --target prod`: the same models, seed, and data tests, with
+   the same incremental `fact_plays`.
+3. **Swap.** All of it runs in a zero-copy clone of the live database, swapped in with
+   `ALTER DATABASE ... SWAP WITH` only when every test passed. A failed build drops the
+   clone and the live database never changes: the DuckDB build's staging file, in
+   Snowflake's terms.
+
+```bash
+fourthdown snowflake check     # compile every model and test for Snowflake; no account needed
+fourthdown snowflake build     # load what changed, build in a clone, swap it in if it passed
+fourthdown snowflake parity    # the two warehouses, measure by measure
+fourthdown dbt build --target prod   # plain dbt against the live database, once loaded
+```
+
+Making the models portable meant replacing three DuckDB-only constructs (aggregate
+`FILTER`, `arg_min`/`arg_max`) with SQL both engines share. On DuckDB, every table and view
+the rewritten project builds is bit-identical to the old one. On Snowflake, `ref()` renders
+without a database name (`core.fact_plays`), because a view keeps its SQL through the swap
+and Snowflake resolves two-part names against the view's own database. CI compiles the whole
+project for Snowflake on every push (`tests/test_snowflake.py`), both the full and the
+incremental `fact_plays`, and fails on SQL Snowflake can't parse, on a DuckDB-only function,
+or on a reference that names its database. In Dagster, `snowflake_warehouse` runs after the
+DuckDB build has passed, from its own sensor, which stays off until `SNOWFLAKE_*` is set.
+Account setup (role, XSMALL warehouse with a credit cap, key-pair service user) is
+[`deploy/snowflake/setup.sql`](deploy/snowflake/setup.sql).
 
 ## Asking questions
 
@@ -559,7 +596,7 @@ The scorecard is published to the job summary. Text-to-SQL and LLM routing run i
 
 ```
 src/fourthdown/
-  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt / pipeline / quality
+  cli.py              typer entrypoint: ingest / etl / warehouse / audit / build / dbt / pipeline / quality / snowflake
   config.py           path resolution (override the data root with FOURTHDOWN_DATA_DIR)
   data/
     ingest.py         nflverse downloads (conditional on the ETag) and the schedule's complete weeks
@@ -568,6 +605,7 @@ src/fourthdown/
     etl.py            lazy Polars pipeline -> week-partitioned Parquet
     modeling.py       runs dbt in-process against a data root; collects test results
     warehouse.py      plans a full or incremental dbt build, swaps it in; read-only connections
+    snowflake.py      the same dbt project in Snowflake: load changed weeks, build in a clone, swap; parity
     audit.py          coverage tables + the last build's dbt test results
   orchestration/
     assets.py         the Dagster assets: ingest by week, dbt (dagster-dbt), index, train, scorecard

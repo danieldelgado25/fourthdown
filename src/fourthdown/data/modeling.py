@@ -9,7 +9,11 @@ Everything dbt needs is passed through the environment rather than flags, so the
 settings serve ``warehouse.build`` and ``fourthdown dbt <any dbt command>``:
 
 * ``FOURTHDOWN_DATA_DIR``: the data root, which the staging views read Parquet relative to;
+* ``FOURTHDOWN_DBT_TARGET``: ``dev`` (DuckDB, the default) or ``prod`` (Snowflake,
+  `fourthdown.data.snowflake`); the same models build on both;
 * ``FOURTHDOWN_DBT_DATABASE``: the DuckDB file to build;
+* ``FOURTHDOWN_SNOWFLAKE_DATABASE``: the Snowflake database to build, when not the live one
+  (``SNOWFLAKE_DATABASE``): the clone a Snowflake build happens in;
 * ``FOURTHDOWN_PLAYERS_AVAILABLE``: whether ``raw/players.parquet`` exists yet;
 * ``DBT_PROJECT_DIR``/``DBT_PROFILES_DIR``: the project, which carries its own profile;
 * ``DBT_TARGET_PATH``/``DBT_LOG_PATH``: dbt's artifacts, kept under the data root because
@@ -37,6 +41,10 @@ LOGGER = logging.getLogger(__name__)
 
 PROJECT_ENV = "FOURTHDOWN_DBT_PROJECT"
 TEST_RESULTS_FILE = "data_tests.json"
+DEFAULT_TARGET = "dev"
+SNOWFLAKE_TARGET = "prod"
+"""The Snowflake output in ``profiles.yml`` (`fourthdown.data.snowflake`)."""
+SNOWFLAKE_DATABASE_ENV = "FOURTHDOWN_SNOWFLAKE_DATABASE"
 # Files that change what a build writes without being a model: macros, the seed, and the
 # project config (materializations, schemas). Tests and docs only check or describe.
 PROJECT_INPUTS = ("dbt_project.yml", "macros", "seeds")
@@ -54,27 +62,39 @@ def project_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "dbt_project"
 
 
-def artifacts_dir(paths: Paths) -> Path:
-    """dbt's target and log directories for this data root."""
-    return paths.warehouse / "dbt"
+def artifacts_dir(paths: Paths, target: str = DEFAULT_TARGET) -> Path:
+    """dbt's target and log directories for this data root and dbt target.
+
+    One per target: a Snowflake build must not overwrite the manifest that records what
+    the DuckDB warehouse was built from.
+    """
+    base = paths.warehouse / "dbt"
+    return base if target == DEFAULT_TARGET else base / target
 
 
 @contextmanager
-def environment(paths: Paths, database: Path | None = None) -> Iterator[dict[str, str]]:
+def environment(
+    paths: Paths, database: Path | str | None = None, *, target: str = DEFAULT_TARGET
+) -> Iterator[dict[str, str]]:
     """Set the variables the project and its profile read, restoring the old values after."""
     project = project_dir()
     if not (project / "dbt_project.yml").exists():
         raise FileNotFoundError(f"no dbt project at {project}; set {PROJECT_ENV}")
-    artifacts = artifacts_dir(paths)
+    artifacts = artifacts_dir(paths, target)
     values = {
         "FOURTHDOWN_DATA_DIR": str(paths.root),
-        "FOURTHDOWN_DBT_DATABASE": str(database or paths.database),
+        "FOURTHDOWN_DBT_TARGET": target,
+        "FOURTHDOWN_DBT_DATABASE": str(
+            (database or paths.database) if target == DEFAULT_TARGET else paths.database
+        ),
         "FOURTHDOWN_PLAYERS_AVAILABLE": "true" if paths.players.exists() else "false",
         "DBT_PROJECT_DIR": str(project),
         "DBT_PROFILES_DIR": str(project),
         "DBT_TARGET_PATH": str(artifacts / "target"),
         "DBT_LOG_PATH": str(artifacts / "logs"),
     }
+    if target != DEFAULT_TARGET and database is not None:
+        values[SNOWFLAKE_DATABASE_ENV] = str(database)
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
@@ -87,11 +107,17 @@ def environment(paths: Paths, database: Path | None = None) -> Iterator[dict[str
                 os.environ[name] = value
 
 
-def invoke(paths: Paths, args: Sequence[str], *, database: Path | None = None) -> Any:
+def invoke(
+    paths: Paths,
+    args: Sequence[str],
+    *,
+    database: Path | str | None = None,
+    target: str = DEFAULT_TARGET,
+) -> Any:
     """Run one dbt command against ``paths`` and return dbt's own result object."""
     from dbt.cli.main import dbtRunner
 
-    with environment(paths, database):
+    with environment(paths, database, target=target):
         try:
             return dbtRunner().invoke(list(args))
         finally:
@@ -238,9 +264,11 @@ def vars_args(weeks: Sequence[str] | None) -> list[str]:
     return [] if weeks is None else ["--vars", json.dumps({"weeks": list(weeks)})]
 
 
-def build_args(*, run_tests: bool = True, weeks: Sequence[str] | None = None) -> list[str]:
+def build_args(
+    *, run_tests: bool = True, weeks: Sequence[str] | None = None, full_refresh: bool = False
+) -> list[str]:
     """The ``dbt build`` arguments after ``build`` itself."""
-    args = []
+    args = ["--full-refresh"] if full_refresh else []
     if not run_tests:
         # Tiny synthetic datasets (the unit tests') cannot pass league-wide checks.
         args += ["--exclude-resource-type", "test", "--exclude-resource-type", "unit_test"]
@@ -249,23 +277,30 @@ def build_args(*, run_tests: bool = True, weeks: Sequence[str] | None = None) ->
 
 def build(
     paths: Paths,
-    database: Path,
+    database: Path | str,
     *,
     run_tests: bool = True,
     weeks: Sequence[str] | None = None,
+    target: str = DEFAULT_TARGET,
+    full_refresh: bool = False,
 ) -> BuildOutcome:
     """``dbt build`` into ``database``: seeds, models, and (unless told not to) data tests.
 
     ``weeks`` makes ``fact_plays`` rebuild only those weeks' games (an incremental build
-    on a copy of the live database; see ``warehouse.plan``).
+    on a copy of the live database; see ``warehouse.plan``). ``target`` picks the profile
+    output: a DuckDB file (``dev``) or a Snowflake database (``snowflake``).
 
     Raises:
         DbtError: a model failed to build or a data test failed. dbt skips everything
             downstream of a failure, so a failed build never yields a partial warehouse
             that looks complete.
     """
-    args = ["build", "--quiet", *build_args(run_tests=run_tests, weeks=weeks)]
-    result = invoke(paths, args, database=database)
+    args = [
+        "build",
+        "--quiet",
+        *build_args(run_tests=run_tests, weeks=weeks, full_refresh=full_refresh),
+    ]
+    result = invoke(paths, args, database=database, target=target)
     if result.exception is not None:
         raise DbtError(f"dbt build did not run: {result.exception}") from result.exception
     tests: list[TestResult] = []
@@ -286,7 +321,7 @@ def build(
             errors.append(f"{node.resource_type} {_test_name(node)}: {node_result.message}")
     if errors or not result.success:
         raise DbtError("dbt build failed:\n  " + "\n  ".join(errors or ["see the dbt log"]))
-    manifest_path = artifacts_dir(paths) / "target" / "manifest.json"
+    manifest_path = artifacts_dir(paths, target) / "target" / "manifest.json"
     return BuildOutcome(models=_models(manifest_path), tests=tuple(tests))
 
 
@@ -328,6 +363,10 @@ def parse_manifest() -> Path:
 
     paths = data_paths()
     with environment(paths):
+        # The manifest is the graph Dagster builds from, so it must not depend on what this
+        # machine has downloaded: parse as if the players file exists, so stg_players
+        # always reads the players source (a fresh checkout or CI has no data).
+        os.environ["FOURTHDOWN_PLAYERS_AVAILABLE"] = "true"
         os.environ["DBT_TARGET_PATH"] = str(target)
         os.environ["DBT_LOG_PATH"] = str(target / "logs")
         from dbt.cli.main import dbtRunner

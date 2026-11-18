@@ -31,12 +31,14 @@ models = [
 # The `fourthdown` CLI: ingest, ETL, indexing, training, evaluation.
 # dbt builds the warehouse (dbt_project/); the warehouse service only reads what it built.
 # Dagster orchestrates all of it as an asset graph (fourthdown.orchestration); Pandera
-# holds each file to its contract (fourthdown.quality).
+# holds each file to its contract (fourthdown.quality); dbt-snowflake builds the same
+# project in Snowflake (fourthdown.data.snowflake), and compiles it for CI without one.
 pipeline = [
     "fourthdown[warehouse,retrieval,models]",
     "typer>=0.12",
     "mlflow>=3.15,<4",
     "dbt-duckdb>=1.11,<2",
+    "dbt-snowflake>=1.12,<2",
     "dagster>=1.13,<1.14",
     "dagster-dbt>=0.29,<0.30",
     "dagster-webserver>=1.13,<1.14",
